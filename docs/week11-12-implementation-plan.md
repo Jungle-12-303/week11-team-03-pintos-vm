@@ -111,6 +111,28 @@ Extra 후보는 `cow-simple` 하나로 제한한다.
 - mmap은 file-backed page와 dirty write-back 책임이 필요하므로 lazy loading 이후에 구현한다.
 - swap과 eviction은 모든 page type의 lifecycle을 건드리므로 후반에 통합한다.
 
+### 6.1 단계별 구현·학습 체크리스트
+
+아래 표는 구현 세션에서 "지금 무엇을 구현하고, 무엇을 설명할 수 있어야 하며, 어떤 테스트로 다음 단계 진입을 판단할지"를 빠르게 맞추기 위한 체크리스트다. 각 단계가 끝나면 Driver는 바뀐 구조체 필드와 자원 해제 경로를 설명하고, Recorder는 통과 테스트와 남은 실패 테스트를 남긴다.
+
+| 단계 | 구현 목표 | 주요 파일 | 학습 포인트 | 다음 단계 진입 기준 |
+|------|------|------|------|------|
+| 0 | 기준선과 회귀 상태 확인 | `README.md`, `docs/*`, `pintos/userprog/*`, `pintos/threads/*` | 현재 Project 1/2 구현이 VM에서 어떤 전제가 되는지 확인 | threads/userprog 회귀 명령과 결과를 팀원이 재현할 수 있음 |
+| 1 | SPT 기본 자료구조 구현 | `include/vm/vm.h`, `vm/vm.c` | page key를 `pg_round_down(va)`로 정규화하는 이유, 중복 insert 거부 기준 | VM 빌드 성공, `spt_find_page()`/`spt_insert_page()` 흐름 코드 리뷰 완료 |
+| 2 | frame allocation과 page claim 연결 | `vm/vm.c`, `include/vm/vm.h` | `struct page`와 `struct frame`의 양방향 참조, 실패 시 반쯤 연결된 상태 정리 | `vm_claim_page()`와 `vm_do_claim_page()`의 성공/실패 경로를 설명할 수 있음 |
+| 3 | ELF segment lazy loading | `userprog/process.c`, `vm/uninit.c`, `vm/vm.c` | aux에 보관할 file, offset, read bytes, zero bytes의 lifetime | `lazy-file`, `lazy-anon`, 기본 `args-*` 실행 흐름 확인 |
+| 4 | VM용 stack setup과 page fault 처리 | `userprog/process.c`, `userprog/exception.c`, `vm/vm.c` | valid fault와 invalid fault 구분, user/kernel fault 처리 기준 | `pt-grow-stack`, `pt-bad-*`, `pt-write-code*` 디버깅 기준 확보 |
+| 5 | SPT copy/kill과 fork 회귀 복구 | `vm/vm.c`, `userprog/process.c` | uninit page와 loaded page 복제 차이, process exit 시 page/frame 정리 | `fork-*`, `multi-*`, `page-linear` 계열을 단계적으로 확인 |
+| 6 | stack growth 완성 | `vm/vm.c` | `fault_addr`, `rsp`, `USER_STACK`, stack limit의 허용 범위 | `pt-grow-stk-sc`, `pt-big-stk-obj`, `pt-grow-bad` 결과 기록 |
+| 7 | mmap/munmap syscall 연결 | `userprog/syscall.c`, `vm/file.c`, `include/vm/file.h` | fd와 mmap file object의 소유권 분리, overlap과 invalid 인자 검증 | `mmap-read`, `mmap-close`, `mmap-bad-*`, `mmap-over-*` 확인 |
+| 8 | page replacement와 frame table | `vm/vm.c`, `include/vm/vm.h` | victim selection, accessed bit, pml4 mapping 제거 순서 | `page-shuffle`, `page-merge-*`, 병렬 page 테스트 재현 |
+| 9 | anonymous page swap in/out | `vm/anon.c`, `vm/vm.c`, `include/vm/anon.h` | swap slot 할당/해제 시점, swap in 성공 후 slot 정리 | `swap-anon`, `swap-iter` 결과 기록 |
+| 10 | file-backed page write-back 정리 | `vm/file.c`, `vm/vm.c`, `userprog/process.c` | dirty bit 기준 write-back, `munmap()`과 process exit 정리 차이 | `mmap-write`, `mmap-exit`, `swap-file`, `mmap-inherit` 확인 |
+| 11 | 전체 회귀와 제출 안정화 | 전체 영향 파일 | VM 변경이 Project 1/2/filesys 회귀에 주는 영향 | VM 필수, userprog, threads, filesys/base 결과를 묶음별로 기록 |
+| 12 | Extra COW 판단 | `vm/*`, `userprog/process.c` | 필수 VM lifecycle 위에서 COW를 얹을 수 있는지 판단 | 필수 VM이 안정된 뒤 `cow-simple`만 별도 결정 |
+
+각 단계에서 새 구조체 필드가 추가되면 PR 설명에 "소유자, 생성 시점, 해제 시점, 실패 시 cleanup 경로"를 함께 적는다. 이 네 가지를 설명하지 못하면 다음 단계로 넘어가지 않는다.
+
 ## 7. 1주차 계획
 
 1주차 목표는 "VM 기반 사용자 프로그램 실행 경로를 살리고, lazy loading과 stack growth의 핵심 테스트를 통과할 수 있는 상태"를 만드는 것이다.
