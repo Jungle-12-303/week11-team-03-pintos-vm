@@ -254,6 +254,7 @@ intr_register_int (uint8_t vec_no, int dpl, enum intr_level level,
 
 /* Returns true during processing of an external interrupt
    and false at all other times. */
+/* 외부 인터럽트(타이머 인터럽트, 키보드 인터럽트, 디스크 인터럽트 등 외부 장치 인터럽트) 핸들러 실행 중이면 true */
 bool
 intr_context (void) {
 	return in_external_intr;

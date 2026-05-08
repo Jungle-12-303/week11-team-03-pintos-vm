@@ -1,131 +1,60 @@
-# 📘 Docker기반 Pintos 개발 환경 구축 가이드 
+# Pintos Virtual Memory 협업 저장소
 
-이 문서는 **Windows**와 **macOS** 사용자가 Docker와 VSCode DevContainer 기능을 활용하여 Pintos OS 프로젝트를 빠르게 구축할 수 있도록 도와줍니다.
+이 저장소는 4인 팀이 KAIST Pintos `Project 3: Virtual Memory`를 함께 구현하고 검증하기 위한 작업 공간입니다. 루트 디렉터리에는 팀 공통 문서와 개발환경 설정을 두고, 실제 Pintos 소스 코드는 `pintos/` 아래에서 관리합니다.
 
-[**주의**]
-* ubunbu:22.04 버전은 충분한 테스트와 검증이 되지 않았습니다. 이 점을 주의해서 사용하시기 바랍니다.
+현재 주 작업 범위는 11-12주차 `Project 3: Virtual Memory`입니다. 기존 9주차 `Project 1: Threads`와 10주차 `Project 2: User Programs` 문서는 참고용으로만 유지하며, 이번 주차의 협업 기준과 구현 순서는 11-12주차 문서를 따릅니다.
 
-[**참고**] 
-* pintos 도커 환경은 `64비트 기반 X86-64` 기반의 `ubuntu:22.04` 버전을 사용합니다.
-   * kaist-pintos는 오리지널 pintos와 달리 64비트 환경을 지원합니다.
-   * 이번 도커 환경은 ubuntu 22.04를 지원하여 vscode의 최신 버전에서 원격 연결이 안되는 문제를 해결하였습니다.
-* pintos 도커 환경은 kaist-pintos에서 추천하는 qemu 에뮬레이터를 설치하고 사용합니다. 
-* pintos 도커 환경은 9주차부터 13주차까지 같은 환경을 사용합니다. 이 기간동안 별도의 개발 환경을 제공하지 않습니다.
-* 기존 도커 환경과 달리 `vscode`와 통합된 디버깅 환경(F5로 시작하는)을 제공하지 않습니다. 디버깅이 필요한 경우 `gdb`를 사용하세요. 
-* vscode에서 터미널을 오픈하면 자동으로 `source /workspaces/pintos_22.04_lab_docker/pintos/activate`를 실행합니다.
+## 빠른 시작
 
----
+1. Docker Desktop을 설치합니다.
+2. VSCode에서 이 저장소를 엽니다.
+3. `Dev Containers: Reopen in Container`로 컨테이너 환경에 들어갑니다.
+4. 필요하면 컨테이너 셸에서 `source /workspaces/week11-team-03-pintos-vm/pintos/activate`를 실행합니다.
 
-## 1. Docker란 무엇인가요?
+자세한 환경 구성 방법은 [개발환경 구축 가이드](docs/dev-environment.md)를 참고하세요.
 
-**Docker**는 애플리케이션을 어떤 컴퓨터에서든 **동일한 환경에서 실행**할 수 있게 도와주는 **가상화 플랫폼**입니다.  
+## 주요 경로
 
-Docker는 다음 구성요소로 이루어져 있습니다:
+| 경로 | 설명 |
+|------|------|
+| `README.md` | 저장소 개요와 협업 진입 문서 |
+| `docs/dev-environment.md` | Docker, VSCode DevContainer 기반 개발환경 안내 |
+| `docs/week11-12/week11-12-collaboration.md` | 11-12주차 Virtual Memory 협업 기준 |
+| `docs/week11-12/week11-12-implementation-plan.md` | 11-12주차 Virtual Memory 2주 구현 계획 |
+| `docs/archive/` | 9-10주차 공식 협업/구현 문서 아카이브 |
+| `docs/gitbook/` | KAIST Pintos GitBook 로컬 참고 문서 |
+| `pintos/README.md` | Pintos 원본 안내 문서 |
+| `pintos/threads/` | Project 1 thread/synchronization 관련 코드 |
+| `pintos/userprog/` | Project 2 user process, syscall, process lifecycle 관련 코드 |
+| `pintos/vm/` | Project 3 virtual memory 관련 코드 |
+| `pintos/tests/threads/` | Project 1 회귀 테스트 코드 |
+| `pintos/tests/userprog/` | Project 2 회귀 테스트 코드 |
+| `pintos/tests/vm/` | Project 3 VM 테스트 코드 |
+| `.devcontainer/` | 팀 공통 컨테이너 개발환경 설정 |
+| `.gitattributes` | tracked text 파일 LF 줄바꿈 정책 |
 
-- **Docker Engine**: 컨테이너를 실행하는 핵심 서비스
-- **Docker Image**: 컨테이너 생성에 사용되는 템플릿 (레시피 📃)
-- **Docker Container**: 이미지를 기반으로 생성된 실제 실행 환경 (요리 🍜)
+## 11-12주차 작업 원칙
 
-### ✅ AWS EC2와의 차이점
+- 4명이 동시에 같은 코드와 테스트 로그를 보며 페어 프로그래밍 방식으로 작업합니다.
+- 명칭은 페어 프로그래밍을 사용하지만, 실제 운영은 Driver 1명과 공동 검토자 3명이 함께 진행하는 4인 공동 코딩입니다.
+- 장기 개인 분업보다 공통 설계, 작은 변경, 빠른 테스트 재현을 우선합니다.
+- `pintos/vm/`, `pintos/include/vm/`, `pintos/userprog/process.c`, `pintos/userprog/exception.c`, `pintos/userprog/syscall.c`, `pintos/include/threads/thread.h` 변경은 4명이 함께 흐름을 확인합니다.
+- Project 3 구현 중에도 Project 1/2 회귀 테스트를 유지합니다.
+- Extra COW는 VM 필수 범위가 안정된 뒤에만 판단합니다.
 
-| 구분 | EC2 같은 VM | Docker 컨테이너 |
-|------|-------------|-----------------|
-| 실행 단위 | OS 포함 전체 | 애플리케이션 단위 |
-| 실행 속도 | 느림 (수십 초 이상) | 매우 빠름 (거의 즉시) |
-| 리소스 사용 | 무거움 | 가벼움 |
+## 줄바꿈 정책
 
----
+이 저장소의 tracked text 파일은 LF 줄바꿈으로 관리합니다.
 
-## 2. VSCode DevContainer란 무엇인가요?
+- `.gitattributes`의 `* text=auto eol=lf` 정책을 기준으로 합니다.
+- 새 문서와 코드 변경은 UTF-8 without BOM과 LF 줄바꿈을 사용합니다.
+- 커밋 전 `git ls-files --eol --modified --others --exclude-standard`로 `w/crlf` 파일이 없는지 확인합니다.
+- 커밋 전 `git diff --check`로 공백과 줄바꿈 문제를 확인합니다.
 
-**DevContainer**는 VSCode에서 Docker 컨테이너를 **개발 환경**처럼 사용할 수 있게 해주는 기능입니다.
+## 참고 문서
 
-- 코드를 실행하거나 디버깅할 때 **컨테이너 내부 환경에서 동작**
-- 팀원 간 **환경 차이 없이 동일한 개발 환경 구성** 가능
-- `.devcontainer` 폴더에 정의된 설정을 VSCode가 읽어 자동 구성
-
----
-
-## 3. Docker Desktop 설치하기
-
-1. Docker 공식 사이트에서 설치 파일 다운로드:  
-   👉 [https://www.docker.com/products/docker-desktop](https://www.docker.com/products/docker-desktop)
-
-2. 설치 후 Docker Desktop 실행  
-   - Windows: Docker 아이콘이 트레이에 떠야 함  
-   - macOS: 상단 메뉴바에 Docker 아이콘 확인
-
----
-
-## 4. 프로젝트 파일 다운로드 (히스토리 없이)
-
-터미널(CMD, PowerShell, zsh 등)에서 아래 명령어로 프로젝트 폴더만 내려받습니다:
-
-```bash
-git clone --depth=1 https://github.com/krafton-jungle/pintos_22.04_lab_docker.git 
-```
-
-- `--depth=1` 옵션은 git commit 히스토리를 생략하고 **최신 파일만 가져옵니다.**
-
-### 📂 다운로드 후 폴더 구조 설명
-
-```
-pintos_22.04_lab_docker/
-├── .devcontainer/
-│   ├── devcontainer.json      # VSCode에서 컨테이너 환경 설정
-│   └── Dockerfile             # pintos 개발 환경 도커 이미지 정의
-│
-├── pintos
-│   ├── threads                # 9주차 threads 프로젝트 폴더
-│   ├── userprog               # 10-11주차 user program 프로젝트 폴더
-│   └── vm                     # 12-13주차 virtual memory 프로젝트 폴더
-│
-└── README.md                  # 현재 문서
-```
----
-
-## 5. VSCode에서 해당 프로젝트 폴더 열기
-
-1. VSCode를 실행
-2. `파일 → 폴더 열기`로 방금 클론한 `pintos_22.04_lab_docker` 폴더를 선택
-
----
-
-## 6. 개발 컨테이너: 컨테이너에서 열기
-
-1. VSCode에서 `Ctrl+Shift+P` (Windows/Linux) 또는 `Cmd+Shift+P` (macOS)를 누릅니다.
-2. 명령어 팔레트에서 `Dev Containers: Reopen in Container`를 선택합니다.
-3. 이후 컨테이너가 자동으로 실행되고 빌드됩니다. 처음 컨테이너를 열면 빌드하는 시간이 오래걸릴 수 있습니다. 빌드 후, 프로젝트가 **컨테이너 안에서 실행됨**.
-
----
-
-## 7. C 파일에 브레이크포인트 설정 후 디버깅 (F5)
-pintos 랩에서는 vscode기반의 디버깅을 지원하지 않습니다. 
-
----
-## 8. 새로운 Git 리포지토리에 Commit & Push 하기
-
-금주 프로젝트를 개인 Git 리포와 같은 다른 리포지토리에 업로드하려면, 기존 Git 연결을 제거하고 새롭게 초기화해야 합니다.
-
-### ✅ 완전히 새로운 Git 리포로 업로드하는 방법
-
-아래 명령어를 순서대로 실행하세요:
-
-```bash
-rm -rf .git
-git init
-git remote add origin https://github.com/myusername/my-new-repo.git
-git add .
-git commit -m "Clean start"
-git push -u origin main
-```
-
-### 📌 설명
-
-- `rm -rf .git`: 기존 Git 기록과 연결을 완전히 삭제합니다.
-- `git init`: 현재 폴더를 새로운 Git 리포지토리로 초기화합니다.
-- `git remote add origin ...`: 새로운 리포지토리 주소를 origin으로 등록합니다.
-- `git add .` 및 `git commit`: 모든 파일을 커밋합니다.
-- `git push`: 새로운 리포에 최초 업로드(Push)합니다.
-
-이 과정을 거치면 기존 리포와의 연결은 완전히 제거되고, **새로운 독립적인 프로젝트로 관리**할 수 있습니다.
+- [11-12주차 Virtual Memory 협업 문서](docs/week11-12/week11-12-collaboration.md)
+- [11-12주차 Virtual Memory 구현 계획](docs/week11-12/week11-12-implementation-plan.md)
+- [개발환경 구축 가이드](docs/dev-environment.md)
+- [Pintos 안내 문서](pintos/README.md)
+- [KAIST Pintos Manual](https://casys-kaist.github.io/pintos-kaist/)

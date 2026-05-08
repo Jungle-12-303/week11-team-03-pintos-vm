@@ -66,7 +66,9 @@ sema_down (struct semaphore *sema) {
 
 	old_level = intr_disable ();
 	while (sema->value == 0) {
-		list_push_back (&sema->waiters, &thread_current ()->elem);
+		// list_push_back (&sema->waiters, &thread_current ()->elem); // FIFO
+		/* sema.waiters도 priority 순서로 대기열에 넣음*/
+		list_insert_ordered (&sema->waiters, &thread_current ()->elem, thread_priority_compare, NULL);
 		thread_block ();
 	}
 	sema->value--;
@@ -102,18 +104,41 @@ sema_try_down (struct semaphore *sema) {
    and wakes up one thread of those waiting for SEMA, if any.
 
    This function may be called from an interrupt handler. */
+/* sema_up()으로 더 높은 priority 스레드를 깨웠다면, 현재 스레드는 yield를 고려해야 한다. */
 void
 sema_up (struct semaphore *sema) {
 	enum intr_level old_level;
+	bool is_yield_necessary = false;
+	struct thread *t = thread_current();
+	struct thread *woken_t = NULL;
 
 	ASSERT (sema != NULL);
 
-	old_level = intr_disable ();
-	if (!list_empty (&sema->waiters))
-		thread_unblock (list_entry (list_pop_front (&sema->waiters),
-					struct thread, elem));
+	old_level = intr_disable (); // 인터럽트 끄기
+
+	// waiter가 있으면 가장 높은 priority waiter를 꺼내 unblock한다.
+	if (!list_empty (&sema->waiters)) {
+		woken_t = list_entry (list_pop_front (&sema->waiters), struct thread, elem);
+		thread_unblock (woken_t);
+	}
+
 	sema->value++;
-	intr_set_level (old_level);
+
+	/* sema_up()으로 더 높은 priority 스레드를 깨웠다면, 현재 스레드는 yield를 고려한다.*/
+	if (woken_t != NULL && woken_t->priority > t->priority) {
+		is_yield_necessary = true;
+	}
+
+	intr_set_level (old_level); // 인터럽트 상태 복구
+
+	// yield 필요시
+	if (is_yield_necessary) {
+		if (intr_context()) { // interrupt 문맥에서는 intr_yield_on_return()
+			intr_yield_on_return();
+		} else {
+			thread_yield(); // 일반 스레드 문맥에서 yield
+		}
+	}
 }
 
 static void sema_test_helper (void *sema_);

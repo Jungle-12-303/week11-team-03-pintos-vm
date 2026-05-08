@@ -3,6 +3,8 @@
 
 /* Copies SIZE bytes from SRC to DST, which must not overlap.
    Returns DST. */
+/* SRC에서 DST로 SIZE 바이트를 복사합니다. 복사된 바이트 수는 겹치지 않아야 합니다.
+   DST를 반환합니다. */
 void *
 memcpy (void *dst_, const void *src_, size_t size) {
 	unsigned char *dst = dst_;
@@ -100,19 +102,29 @@ memchr (const void *block_, int ch_, size_t size) {
    null pointer if C does not appear in STRING.  If C == '\0'
    then returns a pointer to the null terminator at the end of
    STRING. */
+/* 문자열에서 'C'가 처음 나타나는 위치를 찾아 반환합니다.
+	문자열에 'C'가 나타나지 않으면 널 포인터를 반환합니다.
+	만약 'C'가 '\0'이면 문자열 끝에 있는 널 종료 문자에 대한 포인터를 반환합니다. */
+
+	// ' ' / 문자 하나
 char *
 strchr (const char *string, int c_) {
+	// 문자로 만들기
 	char c = c_;
 
 	ASSERT (string);
 
-	for (;;)
+	// 구분자를 끝까지 찾아봤는데 구분자가 먼저 \0이면 그냥 NULL 반환
+	for (;;) {
 		if (*string == c)
 			return (char *) string;
 		else if (*string == '\0')
 			return NULL;
+
+		// 만약 구분자가 문자 하나가 아닐 경우 ++
 		else
 			string++;
+	}
 }
 
 /* Returns the length of the initial substring of STRING that
@@ -215,40 +227,71 @@ outputs:
 'to'
 'tokenize.'
 */
+// 1 매개변수 = 원문
+// 2 매개변수 = 구분자
+// 3 매개변수 = 마지막 \0 값
 char *
 strtok_r (char *s, const char *delimiters, char **save_ptr) {
 	char *token;
 
+	// 예외처리
 	ASSERT (delimiters != NULL);
 	ASSERT (save_ptr != NULL);
 
+
 	/* If S is nonnull, start from it.
 	   If S is null, start from saved position. */
+	// 들어온 주소 자체가 없을 때 예외 처리
 	if (s == NULL)
 		s = *save_ptr;
+
+	// 예외처리
 	ASSERT (s != NULL);
 
 	/* Skip any DELIMITERS at our current position. */
+
+	// 구분자를 토대로 *s를 찾는다.
+	// 구분자가 먼저 끝나면
+	// 널 반환.
 	while (strchr (delimiters, *s) != NULL) {
 		/* strchr() will always return nonnull if we're searching
 		   for a null byte, because every string contains a null
 		   byte (at the end). */
+		/* strchr() 함수는 널 바이트를 찾을 때 항상 null이 아닌 값을 반환합니다.
+			모든 문자열에는 (끝에) 널 바이트가 포함되어 있기 때문입니다. */
+
+		// *s의 주소가 \0 이라는건
 		if (*s == '\0') {
+			// *save_ptr = s로 할당시킴
+			// s는 주소값이 들어있고, save_ptr에 마지막 위치의 주소를 전달
 			*save_ptr = s;
+
+			// 리턴하면?
 			return NULL;
 		}
-
 		s++;
 	}
 
 	/* Skip any non-DELIMITERS up to the end of the string. */
+	/* 문자열의 끝까지, 이어지는 구분자가 아닌, 모든 문자를 건너뜁니다.*/	
+
+	// 구분자가 아닌 곳 까지
+	// string이 끝나는 곳 까지
+	// skip
 	token = s;
-	while (strchr (delimiters, *s) == NULL)
+
+	// delimiters의 끝까지 봤는데 *s와 매치되는 단어를 못찾았을 때
+	while (strchr (delimiters, *s) == NULL) 
+		// s 주소 ++
 		s++;
+
+
+	
+	// *s가 \0이 아닐 때
 	if (*s != '\0') {
 		*s = '\0';
 		*save_ptr = s + 1;
-	} else
+	} else // *s \0일 때
 		*save_ptr = s;
 	return token;
 }

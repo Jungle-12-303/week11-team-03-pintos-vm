@@ -1,0 +1,149 @@
+name: branch-policy
+
+on:
+  workflow_dispatch:
+    inputs:
+      pr_number:
+        description: Pull request number to validate manually
+        required: true
+        type: string
+  pull_request:
+    branches:
+      - main
+      - dev
+      - team
+    types:
+      - opened
+      - reopened
+      - synchronize
+      - edited
+      - ready_for_review
+
+permissions:
+  contents: read
+  pull-requests: read
+  statuses: write
+
+jobs:
+  branch-policy:
+    name: branch-policy
+    if: >
+      github.event_name == 'workflow_dispatch' ||
+      github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Validate branch policy
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const teamMembers = [
+              'HyungminYoon1',
+              'HyeYeonLee0112',
+              'Cho1022',
+              'choihyunjin1',
+            ];
+
+            const allowedRemoteBranches = ['main', 'dev', 'team'];
+
+            const { owner, repo } = context.repo;
+            let pr = context.payload.pull_request;
+
+            async function reportManualStatus(state, description) {
+              if (context.eventName !== 'workflow_dispatch' || !pr?.head?.sha) {
+                return;
+              }
+
+              const targetUrl = `${context.serverUrl}/${owner}/${repo}/actions/runs/${context.runId}`;
+              try {
+                await github.rest.repos.createCommitStatus({
+                  owner,
+                  repo,
+                  sha: pr.head.sha,
+                  state,
+                  context: 'branch-policy',
+                  description: description.slice(0, 140),
+                  target_url: targetUrl,
+                });
+              } catch (error) {
+                core.warning(`Could not report manual branch-policy status: ${error.message}`);
+              }
+            }
+
+            function fail(message) {
+              core.setFailed(message);
+              throw new Error(message);
+            }
+
+            try {
+              if (context.eventName === 'workflow_dispatch') {
+                const prNumberInput = context.payload.inputs?.pr_number;
+                if (!prNumberInput) {
+                  fail('workflow_dispatch requires pr_number input.');
+                }
+
+                const prNumber = Number.parseInt(prNumberInput, 10);
+                if (!Number.isInteger(prNumber) || prNumber <= 0) {
+                  fail(`pr_number must be a positive integer. Current value: ${prNumberInput}.`);
+                }
+
+                const response = await github.rest.pulls.get({
+                  owner,
+                  repo,
+                  pull_number: prNumber,
+                });
+                pr = response.data;
+              }
+
+              const baseBranch = pr.base.ref;
+              const headBranch = pr.head.ref;
+              const prAuthor = pr.user.login;
+              const headRepo = pr.head.repo.full_name;
+              const baseRepo = pr.base.repo.full_name;
+
+              if (pr.state !== 'open') {
+                fail(`Pull request #${pr.number} must be open. Current state: ${pr.state}.`);
+              }
+
+              if (headRepo !== baseRepo) {
+                fail(`Pull requests must come from this repository, not ${headRepo}.`);
+              }
+
+              if (!allowedRemoteBranches.includes(baseBranch) || !allowedRemoteBranches.includes(headBranch)) {
+                fail(
+                  `Only main, dev, and team branches are allowed in pull requests. ` +
+                  `Current flow: ${headBranch} -> ${baseBranch}.`
+                );
+              }
+
+              if (baseBranch === 'main') {
+                if (headBranch !== 'dev') {
+                  fail(`Only dev -> main pull requests are allowed. Current head branch: ${headBranch}.`);
+                }
+
+                core.info('Allowed dev -> main pull request.');
+                await reportManualStatus('success', 'Branch policy passed.');
+                return;
+              }
+
+              if (baseBranch === 'dev') {
+                if (headBranch !== 'team') {
+                  fail(`Only team -> dev pull requests are allowed. Current head branch: ${headBranch}.`);
+                }
+
+                if (!teamMembers.includes(prAuthor)) {
+                  fail(
+                    `team -> dev pull requests must be opened by one of: ` +
+                    `${teamMembers.join(', ')}. Current author: ${prAuthor}.`
+                  );
+                }
+
+                core.info(`Allowed team -> dev pull request by ${prAuthor}.`);
+                await reportManualStatus('success', 'Branch policy passed.');
+                return;
+              }
+
+              fail(`No branch policy applies to ${headBranch} -> ${baseBranch}.`);
+            } catch (error) {
+              await reportManualStatus('failure', error.message || 'Branch policy failed.');
+              throw error;
+            }

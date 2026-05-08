@@ -1,0 +1,5 @@
+# This repository is developed primarily inside a Linux container.
+# Keep tracked text files checked out with LF line endings.
+* text=auto eol=lf
+*.c filter=annotation-local
+*.h filter=annotation-local

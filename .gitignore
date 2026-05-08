@@ -19,6 +19,7 @@
 **/bin/
 **/obj/
 **/output/
+
 # core dump
 core
 
@@ -28,3 +29,28 @@ core
 
 # macOS
 .DS_Store
+Thumbs.db
+
+# IDE / editor
+.vscode/
+.idea/
+*.code-workspace
+
+# Local navigation / debugging tools
+cscope.out
+cscope.in.out
+cscope.po.out
+tags
+.gdb_history
+
+# 테스트
+.test_config
+pintos/**/select_test.sh
+
+# 로컬 파일
+/local
+/temp
+
+# vscode 확장
+.annotation/
+.clang-format
