@@ -58,6 +58,8 @@ struct fd_entry {
 	struct list_elem elem;
 };
 
+#define PROCESS_MAX_FD 512
+
 static bool process_list_initialized (struct list *list);
 static struct fd_entry *process_find_fd_entry (struct thread *t, int fd);
 static struct fd_handle *fd_handle_create (enum process_fd_type type,
@@ -180,7 +182,7 @@ process_insert_fd_entry (struct thread *t, int fd, struct fd_handle *handle) {
 	ASSERT (t != NULL);
 	ASSERT (handle != NULL);
 
-	if (fd < 0 || process_find_fd_entry (t, fd) != NULL)
+	if (fd < 0 || fd >= PROCESS_MAX_FD || process_find_fd_entry (t, fd) != NULL)
 		return false;
 
 	entry = malloc (sizeof *entry);
@@ -213,11 +215,23 @@ process_install_standard_fd (struct thread *t, int fd,
 
 static int
 process_allocate_fd (struct thread *t) {
+	int start;
 	int fd;
 
 	ASSERT (t != NULL);
 
-	for (fd = 0; fd < INT_MAX; fd++) {
+	start = t->next_fd;
+	if (start < 0)
+		start = 0;
+
+	if (start >= PROCESS_MAX_FD)
+		start = 0;
+
+	for (fd = start; fd < PROCESS_MAX_FD; fd++) {
+		if (process_find_fd_entry (t, fd) == NULL)
+			return fd;
+	}
+	for (fd = 0; fd < start; fd++) {
 		if (process_find_fd_entry (t, fd) == NULL)
 			return fd;
 	}
@@ -284,7 +298,8 @@ process_get_fd_type (int fd) {
 
 bool
 process_close_file (int fd) {
-	struct fd_entry *entry = process_find_fd_entry (thread_current (), fd);
+	struct thread *cur = thread_current ();
+	struct fd_entry *entry = process_find_fd_entry (cur, fd);
 
 	if (entry == NULL)
 		return false;
@@ -292,6 +307,8 @@ process_close_file (int fd) {
 	list_remove (&entry->elem);
 	fd_handle_release (entry->handle);
 	free (entry);
+	if (fd < cur->next_fd)
+		cur->next_fd = fd;
 	return true;
 }
 
@@ -875,7 +892,9 @@ process_wait (tid_t child_tid) {
 void
 process_exit (void) {
 	struct thread *curr = thread_current ();
-	printf ("%s: exit(%d)\n", curr->name, curr->exit_status);
+
+	if (curr->pml4 != NULL)
+		printf ("%s: exit(%d)\n", curr->name, curr->exit_status);
 	process_close_all_files ();
 	process_close_exec_file (curr);
 
@@ -1038,14 +1057,19 @@ load (char *file_name, struct intr_frame *if_) {
 	}
 
 	/* Open executable file. */
+	lock_acquire (&filesys_lock);
 	file = filesys_open (tmp_argv[0]);
+	lock_release (&filesys_lock);
 	if (file == NULL) {
 		printf ("load: %s: open failed\n", tmp_argv[0]);
 		goto done;
 	}
 
 	/* Read and verify executable header. */
-	if (file_read (file, &ehdr, sizeof ehdr) != sizeof ehdr || memcmp (ehdr.e_ident, "\177ELF\2\1\1", 7) || ehdr.e_type != 2 || ehdr.e_machine != 0x3E // amd64
+	lock_acquire (&filesys_lock);
+	bool header_read_success = file_read_at (file, &ehdr, sizeof ehdr, 0) == sizeof ehdr;
+	lock_release (&filesys_lock);
+	if (!header_read_success || memcmp (ehdr.e_ident, "\177ELF\2\1\1", 7) || ehdr.e_type != 2 || ehdr.e_machine != 0x3E // amd64
 	    || ehdr.e_version != 1 || ehdr.e_phentsize != sizeof (struct Phdr) || ehdr.e_phnum > 1024) {
 		printf ("load: %s: error loading executable\n", file_name);
 		goto done;
@@ -1055,12 +1079,20 @@ load (char *file_name, struct intr_frame *if_) {
 	file_ofs = ehdr.e_phoff;
 	for (i = 0; i < ehdr.e_phnum; i++) {
 		struct Phdr phdr;
+		off_t file_size;
+		bool phdr_read_success;
 
-		if (file_ofs < 0 || file_ofs > file_length (file))
+		lock_acquire (&filesys_lock);
+		file_size = file_length (file);
+		lock_release (&filesys_lock);
+		if (file_ofs < 0 || file_ofs > file_size)
 			goto done;
-		file_seek (file, file_ofs);
 
-		if (file_read (file, &phdr, sizeof phdr) != sizeof phdr)
+		lock_acquire (&filesys_lock);
+		phdr_read_success = file_read_at (file, &phdr, sizeof phdr,
+		                                  file_ofs) == sizeof phdr;
+		lock_release (&filesys_lock);
+		if (!phdr_read_success)
 			goto done;
 		file_ofs += sizeof phdr;
 		switch (phdr.p_type) {
@@ -1156,14 +1188,18 @@ load (char *file_name, struct intr_frame *if_) {
 	// rox 구현: 파일 로드가 성공한 경우에는 닫지 않고 현재 thread에 보관
 	/* 실행 중인 파일에 대한 쓰기를 막기 위해 deny_write를 걸고 thread에 보관한다.
 	   이 file은 process_exec()로 다른 프로그램을 실행하거나 process_exit()할 때 닫힌다. */
+	lock_acquire (&filesys_lock);
 	file_deny_write (file);
+	lock_release (&filesys_lock);
 	thread_current ()->exec_file = file;
 
 done:
 	/* We arrive here whether the load is successful or not. */
 	/* load 실패 시에는 실행 파일을 thread에 보관하지 않았으므로 여기서 닫아 누수를 막는다. */
 	if (!success && file != NULL) {
+		lock_acquire (&filesys_lock);
 		file_close (file);
+		lock_release (&filesys_lock);
 	}
 
 	return success;
@@ -1173,12 +1209,17 @@ done:
  * FILE and returns true if so, false otherwise. */
 static bool
 validate_segment (const struct Phdr *phdr, struct file *file) {
+	off_t file_size;
+
 	/* p_offset and p_vaddr must have the same page offset. */
 	if ((phdr->p_offset & PGMASK) != (phdr->p_vaddr & PGMASK))
 		return false;
 
 	/* p_offset must point within FILE. */
-	if (phdr->p_offset > (uint64_t) file_length (file))
+	lock_acquire (&filesys_lock);
+	file_size = file_length (file);
+	lock_release (&filesys_lock);
+	if (phdr->p_offset > (uint64_t) file_size)
 		return false;
 
 	/* p_memsz must be at least as big as p_filesz. */
@@ -1242,7 +1283,6 @@ load_segment (struct file *file, off_t ofs, uint8_t *upage,
 	ASSERT (pg_ofs (upage) == 0);
 	ASSERT (ofs % PGSIZE == 0);
 
-	file_seek (file, ofs);
 	while (read_bytes > 0 || zero_bytes > 0) {
 		/* Do calculate how to fill this page.
 		 * We will read PAGE_READ_BYTES bytes from FILE
@@ -1256,7 +1296,10 @@ load_segment (struct file *file, off_t ofs, uint8_t *upage,
 			return false;
 
 		/* Load this page. */
-		if (file_read (file, kpage, page_read_bytes) != (int) page_read_bytes) {
+		lock_acquire (&filesys_lock);
+		off_t bytes_read = file_read_at (file, kpage, page_read_bytes, ofs);
+		lock_release (&filesys_lock);
+		if (bytes_read != (off_t) page_read_bytes) {
 			palloc_free_page (kpage);
 			return false;
 		}
@@ -1272,6 +1315,7 @@ load_segment (struct file *file, off_t ofs, uint8_t *upage,
 		/* Advance. */
 		read_bytes -= page_read_bytes;
 		zero_bytes -= page_zero_bytes;
+		ofs += page_read_bytes;
 		upage += PGSIZE;
 	}
 	return true;

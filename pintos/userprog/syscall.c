@@ -245,7 +245,7 @@ syscall_handler (struct intr_frame *f) {
 		if (type == PROCESS_FD_STDIN) {
 			char *buf = buffer;
 
-			for (int i = 0; i < size; i++)
+			for (unsigned i = 0; i < size; i++)
 				buf[i] = input_getc ();
 
 			f->R.rax = size;
@@ -266,7 +266,7 @@ syscall_handler (struct intr_frame *f) {
 	case SYS_WRITE: {
 		int fd = (int) f->R.rdi;
 		void *buffer = (void *) f->R.rsi;
-		off_t size = f->R.rdx;
+		unsigned size = (unsigned) f->R.rdx;
 		enum process_fd_type type;
 		struct file *file;
 
