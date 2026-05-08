@@ -13,6 +13,7 @@
 struct child_status;
 struct file;
 #endif
+struct lock;
 
 void thread_wakeup(int64_t now_ticks); // sleep_list 순회 후 기다릴 시간이 지난 스레드 깨우는 함수
 
@@ -120,6 +121,13 @@ struct thread {
 
 	char name[16];                      /* Name (for debugging purposes). */
 	int priority;                       /* Priority. 범위는 PRI_MIN (0)부터 PRI_MAX (63)까지임. 우선순위 63이 가장 높다.*/
+	int base_priority;
+	int nice;
+	int recent_cpu;
+	struct lock *waiting_lock;
+	struct list donations;
+	struct list_elem donation_elem;
+	struct list_elem allelem;
 
 	/* Shared between thread.c and synch.c. */
 	struct list_elem elem;              /* List element. */
@@ -185,5 +193,9 @@ int thread_get_load_avg (void);
 void do_iret (struct intr_frame *tf);
 
 bool thread_priority_compare (const struct list_elem *a, const struct list_elem *b, void *aux);
+void thread_donate_to_lock_holder (struct lock *lock);
+void thread_remove_donations_for_lock (struct lock *lock);
+void thread_refresh_priority (void);
+void thread_yield_if_necessary (void);
 
 #endif /* threads/thread.h */
