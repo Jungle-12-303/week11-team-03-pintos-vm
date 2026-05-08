@@ -16,6 +16,7 @@ RUN export DEBIAN_FRONTEND=noninteractive && \
     vim \
     git \
     sudo \
+    bubblewrap \
     qemu-system-x86 \
     python3 \
     && locale-gen ko_KR.UTF-8 && update-locale LANG=ko_KR.UTF-8 
