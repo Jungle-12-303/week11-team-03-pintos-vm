@@ -19,10 +19,11 @@
 |------|------|
 | `README.md` | 저장소 개요와 협업 진입 문서 |
 | `docs/dev-environment.md` | Docker, VSCode DevContainer 기반 개발환경 안내 |
-| `docs/week11-12/week11-12-collaboration.md` | 11-12주차 Virtual Memory 협업 기준 |
-| `docs/week11-12/week11-12-implementation-plan.md` | 11-12주차 Virtual Memory 2주 구현 계획 |
+| `docs/week11-12-collaboration.md` | 11-12주차 Virtual Memory 협업 기준 |
+| `docs/week11-12-implementation-plan.md` | 11-12주차 Virtual Memory 2주 구현 계획 |
 | `docs/archive/` | 9-10주차 공식 협업/구현 문서 아카이브 |
-| `docs/gitbook/` | KAIST Pintos GitBook 로컬 참고 문서 |
+| `docs/kaist-pintos-gitbook/` | KAIST Pintos GitBook 로컬 참고 문서 |
+| `docs/reference/gitbook-reference-links.md` | KAIST Pintos GitBook 원문 링크 모음 |
 | `pintos/README.md` | Pintos 원본 안내 문서 |
 | `pintos/threads/` | Project 1 thread/synchronization 관련 코드 |
 | `pintos/userprog/` | Project 2 user process, syscall, process lifecycle 관련 코드 |
@@ -53,8 +54,8 @@
 
 ## 참고 문서
 
-- [11-12주차 Virtual Memory 협업 문서](docs/week11-12/week11-12-collaboration.md)
-- [11-12주차 Virtual Memory 구현 계획](docs/week11-12/week11-12-implementation-plan.md)
+- [11-12주차 Virtual Memory 협업 문서](docs/week11-12-collaboration.md)
+- [11-12주차 Virtual Memory 구현 계획](docs/week11-12-implementation-plan.md)
 - [개발환경 구축 가이드](docs/dev-environment.md)
 - [Pintos 안내 문서](pintos/README.md)
 - [KAIST Pintos Manual](https://casys-kaist.github.io/pintos-kaist/)
