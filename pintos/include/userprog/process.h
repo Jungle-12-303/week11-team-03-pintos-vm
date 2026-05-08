@@ -19,6 +19,13 @@ struct child_status {
 	struct list_elem elem;      // 부모의 children 리스트에 child_status를 넣기 위한 리스트 연결 필드
 };
 
+enum process_fd_type {
+	PROCESS_FD_INVALID,
+	PROCESS_FD_STDIN,
+	PROCESS_FD_STDOUT,
+	PROCESS_FD_FILE
+};
+
 tid_t process_create_initd (const char *file_name);
 tid_t process_fork (const char *name, struct intr_frame *if_);
 int process_exec (void *f_name);
@@ -30,8 +37,10 @@ void process_activate (struct thread *next);
 
 int process_add_file (struct file *file);
 struct file *process_get_file (int fd);
+enum process_fd_type process_get_fd_type (int fd);
 bool process_close_file (int fd);
 void process_close_all_files (void);
+int process_dup2 (int oldfd, int newfd);
 bool process_duplicate_fds (struct thread *dst, struct thread *src);
 struct child_status *process_find_child (tid_t tid);
 void child_status_release (struct child_status *cs);

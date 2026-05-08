@@ -13,6 +13,7 @@
 #include "userprog/process.h"
 #include "threads/flags.h"
 #include "intrinsic.h"
+#include "devices/input.h"
 #include "filesys/filesys.h"
 #include "filesys/file.h"
 
@@ -187,67 +188,78 @@ syscall_handler (struct intr_frame *f) {
 	}
 	case SYS_CREATE: /* Create a file. */
 	{
-		// 값 들어 오는 것 확인
-		// rdi로 제목 데이터 / rsi로 길이 데이터 들어옴.
-		// file 먼저 찾아보고 있으면 에러 반환
-		char *file = (char *) f->R.rdi;
+		const char *file = (const char *) f->R.rdi;
 
 		user_check_string (file);
-		f->R.rax = filesys_create ((char *) f->R.rdi, f->R.rsi);
+		lock_acquire (&filesys_lock);
+		f->R.rax = filesys_create (file, f->R.rsi);
+		lock_release (&filesys_lock);
 		break;
 	}
 	case SYS_REMOVE: /* Delete a file. */
 	{
-		user_check_ptr ((void *) f->R.rdi); // 제거하려는 파일의 포인터가 올바르지 않은 경우 오류
-		// TODO
+		const char *file = (const char *) f->R.rdi;
+
+		user_check_string (file);
+		lock_acquire (&filesys_lock);
+		f->R.rax = filesys_remove (file);
+		lock_release (&filesys_lock);
 		break;
 	}
 	case SYS_OPEN: {
-		// f->R.rax = filesys_open((char *)f->R.rdi);
 		const char *file_name = (const char *) f->R.rdi;
 		struct file *file;
 
 		user_check_string (file_name);
+		lock_acquire (&filesys_lock);
 		file = filesys_open (file_name);
+		lock_release (&filesys_lock);
 		f->R.rax = process_add_file (file);
 		break;
 	}
 	case SYS_FILESIZE: /* Obtain a file's size. */
 	{
 		int fd = (int) f->R.rdi;
+		struct file *file = process_get_file (fd);
 
-		f->R.rax = file_length (process_get_file (fd));
+		if (file == NULL) {
+			f->R.rax = -1;
+			break;
+		}
+		lock_acquire (&filesys_lock);
+		f->R.rax = file_length (file);
+		lock_release (&filesys_lock);
 		break;
 	}
-	case SYS_READ: // TODO                   /* Read from a file. */
+	case SYS_READ: /* Read from a file. */
 	{
 		int fd = (int) f->R.rdi;
 		void *buffer = (void *) f->R.rsi;
 		unsigned size = (unsigned) f->R.rdx;
+		enum process_fd_type type;
 		struct file *file;
 
 		user_check_write (buffer, size);
+		type = process_get_fd_type (fd);
 
-		// fd 0일 때 키보드 입력값으로 대체.
-		if (fd == 0) {
+		if (type == PROCESS_FD_STDIN) {
 			char *buf = buffer;
 
 			for (int i = 0; i < size; i++)
 				buf[i] = input_getc ();
 
 			f->R.rax = size;
-		} // 파일을 특정했을 때
-		else if (fd >= 2) {
+		} else if (type == PROCESS_FD_FILE) {
 			file = process_get_file (fd);
-
-			if (file == NULL) {
-				process_exit_with_status (-1);
-			} else {
-				// file_read로 읽어서 값 반환
+			if (file == NULL)
+				f->R.rax = -1;
+			else {
+				lock_acquire (&filesys_lock);
 				f->R.rax = file_read (file, buffer, size);
+				lock_release (&filesys_lock);
 			}
 		} else {
-			process_exit_with_status (-1);
+			f->R.rax = -1;
 		}
 		break;
 	}
@@ -255,22 +267,24 @@ syscall_handler (struct intr_frame *f) {
 		int fd = (int) f->R.rdi;
 		void *buffer = (void *) f->R.rsi;
 		off_t size = f->R.rdx;
+		enum process_fd_type type;
 		struct file *file;
 
 		user_check_read (buffer, size);
+		type = process_get_fd_type (fd);
 
-		if (fd == 1) {
+		if (type == PROCESS_FD_STDOUT) {
 			putbuf (buffer, size);
 			f->R.rax = size;
-		} else if (fd >= 2) {
-			// 열어둔 파일에 값을 입력한다는 의미니까
+		} else if (type == PROCESS_FD_FILE) {
 			file = process_get_file (fd);
 			if (file == NULL) {
 				f->R.rax = -1;
 				break;
 			}
+			lock_acquire (&filesys_lock);
 			f->R.rax = file_write (file, buffer, size);
-			// file_write(struct file * file, const void *buffer, off_t size)
+			lock_release (&filesys_lock);
 		} else {
 			f->R.rax = -1;
 		}
@@ -283,16 +297,32 @@ syscall_handler (struct intr_frame *f) {
 		struct file *file = process_get_file (fd); // 사용자 프로그램의 fd를 커널 내부의 struct file *로 변경
 
 		if (file != NULL) {
+			lock_acquire (&filesys_lock);
 			file_seek (file, position); // 열린 파일의 현재 위치 pos를 position으로 바꾸기
+			lock_release (&filesys_lock);
 		}
 
 		break;
 	}
-	case SYS_TELL: // TODO               /* Report current position in a file. */
-		f->R.rax = -1;
+	case SYS_TELL: /* Report current position in a file. */
+	{
+		int fd = (int) f->R.rdi;
+		struct file *file = process_get_file (fd);
+
+		if (file == NULL) {
+			f->R.rax = -1;
+			break;
+		}
+		lock_acquire (&filesys_lock);
+		f->R.rax = file_tell (file);
+		lock_release (&filesys_lock);
 		break;
-	case SYS_CLOSE: // TODO                 /* Close a file. */
+	}
+	case SYS_CLOSE: /* Close a file. */
 		process_close_file (f->R.rdi);
+		break;
+	case SYS_DUP2:
+		f->R.rax = process_dup2 ((int) f->R.rdi, (int) f->R.rsi);
 		break;
 	default:
 		process_exit_with_status (-1); // 프로세스 비정상 종료

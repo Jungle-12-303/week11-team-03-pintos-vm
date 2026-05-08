@@ -1,6 +1,7 @@
 #include "userprog/process.h"
 #include <debug.h>
 #include <inttypes.h>
+#include <limits.h>
 #include <round.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -43,18 +44,33 @@ struct initd_aux {
 	struct child_status *child_info;
 };
 
-/* 프로세스별 fd table의 한 항목.
-   fd는 user program이 사용하는 정수 file descriptor이고,
-   file은 실제 열린 파일 객체를 가리킨다.
-   elem은 thread_current()->fd_table 리스트에 연결하기 위한 list element다. */
+/* dup2()로 복제된 fd들은 file offset을 공유해야 하므로 fd_entry가 file을
+   직접 소유하지 않고 참조 카운트가 있는 fd_handle을 가리키게 한다. */
+struct fd_handle {
+	enum process_fd_type type;
+	struct file *file;
+	int ref_cnt;
+};
+
 struct fd_entry {
 	int fd;
-	struct file *file;
+	struct fd_handle *handle;
 	struct list_elem elem;
 };
 
 static bool process_list_initialized (struct list *list);
 static struct fd_entry *process_find_fd_entry (struct thread *t, int fd);
+static struct fd_handle *fd_handle_create (enum process_fd_type type,
+                                           struct file *file);
+static struct fd_handle *fd_handle_duplicate (struct fd_handle *handle);
+static void fd_handle_acquire (struct fd_handle *handle);
+static void fd_handle_release (struct fd_handle *handle);
+static void fd_handle_destroy (struct fd_handle *handle);
+static bool process_insert_fd_entry (struct thread *t, int fd,
+                                     struct fd_handle *handle);
+static bool process_install_standard_fd (struct thread *t, int fd,
+                                         enum process_fd_type type);
+static int process_allocate_fd (struct thread *t);
 static void process_close_files (struct thread *t);
 static void process_close_exec_file (struct thread *t);
 
@@ -69,8 +85,12 @@ void
 process_user_init (struct thread *t) {
 	ASSERT (t != NULL);
 
-	if (!process_list_initialized (&t->fd_table))
+	if (!process_list_initialized (&t->fd_table)) {
 		list_init (&t->fd_table);
+		t->next_fd = 0;
+		process_install_standard_fd (t, 0, PROCESS_FD_STDIN);
+		process_install_standard_fd (t, 1, PROCESS_FD_STDOUT);
+	}
 	if (!process_list_initialized (&t->children))
 		list_init (&t->children);
 	if (t->next_fd < 2)
@@ -84,25 +104,151 @@ process_list_initialized (struct list *list) {
 	return list->head.next != NULL && list->tail.prev != NULL;
 }
 
+static struct fd_handle *
+fd_handle_create (enum process_fd_type type, struct file *file) {
+	struct fd_handle *handle = malloc (sizeof *handle);
+
+	if (handle == NULL)
+		return NULL;
+
+	handle->type = type;
+	handle->file = file;
+	handle->ref_cnt = 0;
+	return handle;
+}
+
+static struct fd_handle *
+fd_handle_duplicate (struct fd_handle *handle) {
+	struct file *file = NULL;
+	struct fd_handle *copy;
+
+	ASSERT (handle != NULL);
+
+	if (handle->type == PROCESS_FD_FILE) {
+		lock_acquire (&filesys_lock);
+		file = file_duplicate (handle->file);
+		lock_release (&filesys_lock);
+		if (file == NULL)
+			return NULL;
+	}
+
+	copy = fd_handle_create (handle->type, file);
+	if (copy == NULL) {
+		if (file != NULL) {
+			lock_acquire (&filesys_lock);
+			file_close (file);
+			lock_release (&filesys_lock);
+		}
+		return NULL;
+	}
+
+	return copy;
+}
+
+static void
+fd_handle_acquire (struct fd_handle *handle) {
+	ASSERT (handle != NULL);
+	handle->ref_cnt++;
+}
+
+static void
+fd_handle_release (struct fd_handle *handle) {
+	ASSERT (handle != NULL);
+	ASSERT (handle->ref_cnt > 0);
+
+	handle->ref_cnt--;
+	if (handle->ref_cnt == 0)
+		fd_handle_destroy (handle);
+}
+
+static void
+fd_handle_destroy (struct fd_handle *handle) {
+	ASSERT (handle != NULL);
+
+	if (handle->type == PROCESS_FD_FILE && handle->file != NULL) {
+		lock_acquire (&filesys_lock);
+		file_close (handle->file);
+		lock_release (&filesys_lock);
+	}
+	free (handle);
+}
+
+static bool
+process_insert_fd_entry (struct thread *t, int fd, struct fd_handle *handle) {
+	struct fd_entry *entry;
+
+	ASSERT (t != NULL);
+	ASSERT (handle != NULL);
+
+	if (fd < 0 || process_find_fd_entry (t, fd) != NULL)
+		return false;
+
+	entry = malloc (sizeof *entry);
+	if (entry == NULL)
+		return false;
+
+	entry->fd = fd;
+	entry->handle = handle;
+	fd_handle_acquire (handle);
+	list_push_back (&t->fd_table, &entry->elem);
+
+	if (fd >= t->next_fd && fd < INT_MAX)
+		t->next_fd = fd + 1;
+	return true;
+}
+
+static bool
+process_install_standard_fd (struct thread *t, int fd,
+                             enum process_fd_type type) {
+	struct fd_handle *handle = fd_handle_create (type, NULL);
+
+	if (handle == NULL)
+		return false;
+	if (!process_insert_fd_entry (t, fd, handle)) {
+		fd_handle_destroy (handle);
+		return false;
+	}
+	return true;
+}
+
+static int
+process_allocate_fd (struct thread *t) {
+	int fd;
+
+	ASSERT (t != NULL);
+
+	for (fd = 0; fd < INT_MAX; fd++) {
+		if (process_find_fd_entry (t, fd) == NULL)
+			return fd;
+	}
+	return -1;
+}
+
 int
 process_add_file (struct file *file) {
 	struct thread *cur = thread_current ();
-	struct fd_entry *entry;
+	struct fd_handle *handle;
+	int fd;
 
 	if (file == NULL)
 		return -1;
 
-	/* fd 0(stdin), fd 1(stdout)은 syscall 쪽에서 특별 취급하므로
-	   일반 파일 fd는 현재 프로세스의 next_fd 값인 2부터 할당한다. */
 	process_user_init (cur);
-	entry = malloc (sizeof *entry);
-	if (entry == NULL)
+	handle = fd_handle_create (PROCESS_FD_FILE, file);
+	if (handle == NULL) {
+		lock_acquire (&filesys_lock);
+		file_close (file);
+		lock_release (&filesys_lock);
 		return -1;
+	}
 
-	entry->fd = cur->next_fd++;
-	entry->file = file;
-	list_push_back (&cur->fd_table, &entry->elem);
-	return entry->fd;
+	fd = process_allocate_fd (cur);
+	if (fd < 0 || !process_insert_fd_entry (cur, fd, handle)) {
+		fd_handle_destroy (handle);
+		return -1;
+	}
+
+	return fd;
 }
 
 static struct fd_entry *
@@ -123,10 +269,17 @@ process_find_fd_entry (struct thread *t, int fd) {
 
 struct file *
 process_get_file (int fd) {
-	/* 현재 프로세스 fd table에서 일반 파일 fd에 대응하는 struct file을 찾는다.
-	   stdin/stdout 같은 표준 fd 처리는 syscall 계층에서 분기한다. */
 	struct fd_entry *entry = process_find_fd_entry (thread_current (), fd);
-	return entry != NULL ? entry->file : NULL;
+
+	if (entry == NULL || entry->handle->type != PROCESS_FD_FILE)
+		return NULL;
+	return entry->handle->file;
+}
+
+enum process_fd_type
+process_get_fd_type (int fd) {
+	struct fd_entry *entry = process_find_fd_entry (thread_current (), fd);
+	return entry != NULL ? entry->handle->type : PROCESS_FD_INVALID;
 }
 
 bool
@@ -136,9 +289,8 @@ process_close_file (int fd) {
 	if (entry == NULL)
 		return false;
 
-	/* fd table에서 제거한 뒤 file을 닫아 이 프로세스가 가진 fd 소유권을 끝낸다. */
 	list_remove (&entry->elem);
-	file_close (entry->file);
+	fd_handle_release (entry->handle);
 	free (entry);
 	return true;
 }
@@ -157,21 +309,52 @@ process_close_files (struct thread *t) {
 	while (!list_empty (&t->fd_table)) {
 		struct list_elem *e = list_pop_front (&t->fd_table);
 		struct fd_entry *entry = list_entry (e, struct fd_entry, elem);
-		file_close (entry->file);
+		fd_handle_release (entry->handle);
 		free (entry);
 	}
 }
 
+int
+process_dup2 (int oldfd, int newfd) {
+	struct thread *cur = thread_current ();
+	struct fd_entry *old_entry;
+
+	if (newfd < 0)
+		return -1;
+
+	process_user_init (cur);
+	old_entry = process_find_fd_entry (cur, oldfd);
+	if (old_entry == NULL)
+		return -1;
+	if (oldfd == newfd)
+		return newfd;
+
+	process_close_file (newfd);
+	if (!process_insert_fd_entry (cur, newfd, old_entry->handle))
+		return -1;
+
+	return newfd;
+}
+
 bool
 process_duplicate_fds (struct thread *dst, struct thread *src) {
+	struct fd_handle_map {
+		struct fd_handle *src;
+		struct fd_handle *dst;
+		struct list_elem elem;
+	};
+
+	struct list maps;
 	struct list_elem *e;
+	struct list_elem *m;
 
 	ASSERT (dst != NULL);
 	ASSERT (src != NULL);
 
-	/* fork된 child는 parent와 같은 fd 번호를 유지해야 한다.
-	   file_duplicate()은 file 위치와 deny_write 상태를 포함한 새 file 객체를 만든다. */
 	process_user_init (dst);
+	process_close_files (dst);
+	list_init (&maps);
+
 	if (!process_list_initialized (&src->fd_table))
 		return true;
 
@@ -179,21 +362,50 @@ process_duplicate_fds (struct thread *dst, struct thread *src) {
 	for (e = list_begin (&src->fd_table); e != list_end (&src->fd_table);
 	     e = list_next (e)) {
 		struct fd_entry *src_entry = list_entry (e, struct fd_entry, elem);
-		struct fd_entry *dst_entry = malloc (sizeof *dst_entry);
-		if (dst_entry == NULL)
-			goto fail;
+		struct fd_handle_map *map = NULL;
 
-		dst_entry->fd = src_entry->fd;
-		dst_entry->file = file_duplicate (src_entry->file);
-		if (dst_entry->file == NULL) {
-			free (dst_entry);
-			goto fail;
+		for (m = list_begin (&maps); m != list_end (&maps); m = list_next (m)) {
+			struct fd_handle_map *candidate =
+				list_entry (m, struct fd_handle_map, elem);
+			if (candidate->src == src_entry->handle) {
+				map = candidate;
+				break;
+			}
 		}
-		list_push_back (&dst->fd_table, &dst_entry->elem);
+
+		if (map == NULL) {
+			map = malloc (sizeof *map);
+			if (map == NULL)
+				goto fail;
+
+			map->src = src_entry->handle;
+			map->dst = fd_handle_duplicate (src_entry->handle);
+			if (map->dst == NULL) {
+				free (map);
+				goto fail;
+			}
+			list_push_back (&maps, &map->elem);
+		}
+
+		if (!process_insert_fd_entry (dst, src_entry->fd, map->dst))
+			goto fail;
+	}
+
+	while (!list_empty (&maps)) {
+		struct list_elem *elem = list_pop_front (&maps);
+		struct fd_handle_map *map = list_entry (elem, struct fd_handle_map, elem);
+		free (map);
 	}
 	return true;
 
 fail:
+	while (!list_empty (&maps)) {
+		struct list_elem *elem = list_pop_front (&maps);
+		struct fd_handle_map *map = list_entry (elem, struct fd_handle_map, elem);
+		if (map->dst->ref_cnt == 0)
+			fd_handle_destroy (map->dst);
+		free (map);
+	}
 	process_close_files (dst);
 	return false;
 }
