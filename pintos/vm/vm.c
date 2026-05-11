@@ -123,8 +123,21 @@ bool spt_insert_page(struct supplemental_page_table *spt,
 
 void spt_remove_page(struct supplemental_page_table *spt, struct page *page)
 {
+	ASSERT(spt != NULL);
+	ASSERT(page != NULL);
+	
+	//ASSERT(!hash_empty(&spt->spt_hash));
+
+	struct hash *h = &spt->spt_hash;
+	struct hash_elem *h_e = &page->hash_elem;
+
+	if(hash_delete(h, h_e) == NULL){
+		printf("!! [spt_remove_page] 삭제할 page를 찾을 수 없다 \n");
+		return;
+	}
+
 	vm_dealloc_page(page);
-	return true;
+	return;
 }
 
 /* Get the struct frame, that will be evicted. */
