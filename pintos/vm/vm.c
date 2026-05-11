@@ -5,8 +5,10 @@
 #include "vm/inspect.h"
 #include <hash.h>
 #include "threads/vaddr.h"
-//* Computes and returns the hash value for hash element E, given
-//* auxiliary data AUX. */
+/* hash.h의 hash_hash_func typedef 이름과 충돌하지 않도록 콜백 함수 이름을 hash_func로 둔다. */
+
+/* SPT에서 page->va를 key로 쓰기 위한 hash 함수.
+   hash_elem으로부터 struct page를 꺼내고, va 값으로 hash를 계산한다. */
 static uint64_t 
 hash_func(const struct hash_elem *e, 
 				void *aux UNUSED)
@@ -16,6 +18,10 @@ hash_func(const struct hash_elem *e,
 }
 
 /*  page 주소 비교 함수 완성  */
+/* hash.h의 hash_less_func typedef 이름과 충돌하지 않도록 콜백 함수 이름을 hash_less로 둔다. */
+
+/* SPT hash table에서 두 page의 va를 비교하는 함수.
+   hash table이 page를 넣거나 찾을 때, 두 page 중 어느 va가 더 작은지 판단하는 데 사용한다. */
 static bool
 hash_less(const struct hash_elem *a,
 			   const struct hash_elem *b,
