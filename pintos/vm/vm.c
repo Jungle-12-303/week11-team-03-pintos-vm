@@ -89,11 +89,19 @@ err:
 
 /* Find VA from spt and return page. On error, return NULL. */
 struct page *
-spt_find_page(struct supplemental_page_table *spt UNUSED, void *va UNUSED)
+spt_find_page(struct supplemental_page_table *spt, void *va )
 {
-	struct page *page = NULL;
-	/* TODO: Fill this function. */
+	struct page temp_page = {
+		.va = pg_round_down(va), };
 
+	struct hash_elem *h_e = hash_find( &spt->spt_hash, &temp_page.hash_elem);
+	
+	if (h_e == NULL)
+		return NULL;
+
+	//찾은 hash_elem을 가공해서 찾으려던 page를 반환
+	struct page *page = hash_entry(h_e, struct page, hash_elem);
+	
 	return page;
 }
 
@@ -206,7 +214,7 @@ vm_do_claim_page(struct page *page)
 }
 
 /* Initialize new supplemental page table */
-void supplemental_page_table_init(struct supplemental_page_table *spt UNUSED)
+void supplemental_page_table_init(struct supplemental_page_table *spt)
 {
 
 	hash_init(&spt->spt_hash,
