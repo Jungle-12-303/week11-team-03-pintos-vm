@@ -4,11 +4,11 @@
 #include "vm/vm.h"
 #include "vm/inspect.h"
 #include <hash.h>
-
+#include "threads/vaddr.h"
 //* Computes and returns the hash value for hash element E, given
 //* auxiliary data AUX. */
 static uint64_t 
-hash_hash_func(const struct hash_elem *e, 
+hash_func(const struct hash_elem *e, 
 				void *aux UNUSED)
 {
 	struct page *pp = hash_entry(e, struct page, hash_elem);
@@ -17,7 +17,7 @@ hash_hash_func(const struct hash_elem *e,
 
 /*  page 주소 비교 함수 완성  */
 static bool
-hash_less_func(const struct hash_elem *a,
+hash_less(const struct hash_elem *a,
 			   const struct hash_elem *b,
 			   void *aux UNUSED)
 {
@@ -237,7 +237,7 @@ void supplemental_page_table_init(struct supplemental_page_table *spt)
 {
 
 	hash_init(&spt->spt_hash,
-			  &hash_hash_func, &hash_less_func, NULL);
+			  &hash_func, &hash_less, NULL);
 }
 
 /* Copy supplemental page table from src to dst */
