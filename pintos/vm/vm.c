@@ -106,11 +106,17 @@ spt_find_page(struct supplemental_page_table *spt, void *va )
 }
 
 /* Insert PAGE into spt with validation. */
-bool spt_insert_page(struct supplemental_page_table *spt UNUSED,
-					 struct page *page UNUSED)
+bool spt_insert_page(struct supplemental_page_table *spt,
+					 struct page *page)
 {
+	ASSERT(spt != NULL);
+	ASSERT(page != NULL);
+
 	int succ = false;
-	/* TODO: Fill this function. */
+	struct hash_elem *h_e = &page->hash_elem;
+
+	if(hash_insert(&spt->spt_hash, h_e) == NULL)
+		succ = true;
 
 	return succ;
 }
