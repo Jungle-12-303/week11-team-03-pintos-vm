@@ -5,17 +5,21 @@
 #include "vm/inspect.h"
 #include <hash.h>
 
-//todo
-static uint64_t hash_hash_func(const struct hash_elem *e, void *aux)
+//* Computes and returns the hash value for hash element E, given
+//* auxiliary data AUX. */
+static uint64_t 
+hash_hash_func(const struct hash_elem *e, 
+				void *aux UNUSED)
 {
-
+	struct page *pp = hash_entry(e, struct page, hash_elem);
+	return hash_bytes(&pp->va, sizeof pp->va);
 }
 
 /*  page 주소 비교 함수 완성  */
 static bool
 hash_less_func(const struct hash_elem *a,
 			   const struct hash_elem *b,
-			   void *aux)
+			   void *aux UNUSED)
 {
 	struct page *pga = hash_entry(a, struct page, hash_elem);
 	struct page *pgb = hash_entry(b, struct page, hash_elem);
@@ -206,7 +210,7 @@ void supplemental_page_table_init(struct supplemental_page_table *spt UNUSED)
 {
 
 	hash_init(&spt->spt_hash,
-			  hash_hash_func * hash, hash_less_func * less, NULL);
+			  &hash_hash_func, &hash_less_func, NULL);
 }
 
 /* Copy supplemental page table from src to dst */
