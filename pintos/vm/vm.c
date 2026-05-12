@@ -45,7 +45,7 @@ void vm_init(void)
 #endif
 	register_inspect_intr();
 	/* DO NOT MODIFY UPPER LINES. */
-	/* TODO: Your code goes here. */	
+	/* TODO: Your code goes here. */
 }
 
 /* Get the type of the page. This function is useful if you want to know the
@@ -74,7 +74,7 @@ static struct frame *vm_evict_frame(void);
  * `vm_alloc_page`. */
 bool vm_alloc_page_with_initializer(enum vm_type type, void *upage, bool writable,
 									vm_initializer *init, void *aux)
-{
+{	
 	ASSERT(VM_TYPE(type) != VM_UNINIT)
 	/* VM_UNINIT */
 	bool (*page_initializer)(struct page *, enum vm_type, void *) = NULL;
@@ -99,6 +99,7 @@ bool vm_alloc_page_with_initializer(enum vm_type type, void *upage, bool writabl
 		/* TODO: and then create "uninit" page struct by calling uninit_new.
 		  You should modify the field after calling the uninit_new. */
 		uninit_new(pp, upage, init, type, aux, page_initializer); 
+		pp->writable = writable;
 
 		/* TODO: Insert the page into the spt. */
 		if (!spt_insert_page(spt, pp)) 
@@ -193,11 +194,26 @@ vm_evict_frame(void)
 static struct frame *
 vm_get_frame(void)
 {
-	struct frame *frame = NULL;
-	/* TODO: Fill this function. */
+	struct frame *frame = malloc(sizeof *frame);
+	if (frame == NULL)
+		return NULL;
+
+	frame->page = NULL;
+	frame->kva = palloc_get_page(PAL_USER);
+
+	if (frame->kva == NULL)
+	{
+		free(frame);
+
+		frame = vm_evict_frame();
+		if (frame == NULL)
+			return NULL;
+	}
 
 	ASSERT(frame != NULL);
 	ASSERT(frame->page == NULL);
+	ASSERT(frame->kva != NULL);
+
 	return frame;
 }
 
