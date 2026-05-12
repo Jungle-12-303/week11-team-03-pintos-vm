@@ -383,7 +383,7 @@ process_duplicate_fds (struct thread *dst, struct thread *src) {
 
 		for (m = list_begin (&maps); m != list_end (&maps); m = list_next (m)) {
 			struct fd_handle_map *candidate =
-				list_entry (m, struct fd_handle_map, elem);
+			        list_entry (m, struct fd_handle_map, elem);
 			if (candidate->src == src_entry->handle) {
 				map = candidate;
 				break;
@@ -1415,10 +1415,17 @@ setup_stack (struct intr_frame *if_) {
 	bool success = false;
 	void *stack_bottom = (void *) (((uint8_t *) USER_STACK) - PGSIZE);
 
-	/* TODO: Map the stack on stack_bottom and claim the page immediately.
-	 * TODO: If success, set the rsp accordingly.
-	 * TODO: You should mark the page is stack. */
-	/* TODO: Your code goes here */
+	/*  Map the stack on stack_bottom and claim the page immediately.
+	 *  If success, set the rsp accordingly.
+	 *  You should mark the page is stack. */
+
+	// VM_MARKER_0는 "이 anon page가 스택이다"라는 추가 꼬리표를 달기 위해 추가
+	if (vm_alloc_page (VM_ANON | VM_MARKER_0, stack_bottom, true)) {
+		success = vm_claim_page (stack_bottom);
+		if (success) {
+			if_->rsp = USER_STACK;
+		}
+	}
 
 	return success;
 }
