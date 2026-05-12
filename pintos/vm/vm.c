@@ -45,7 +45,7 @@ void vm_init(void)
 #endif
 	register_inspect_intr();
 	/* DO NOT MODIFY UPPER LINES. */
-	/* TODO: Your code goes here. */
+	/* TODO: Your code goes here. */	
 }
 
 /* Get the type of the page. This function is useful if you want to know the
@@ -75,19 +75,38 @@ static struct frame *vm_evict_frame(void);
 bool vm_alloc_page_with_initializer(enum vm_type type, void *upage, bool writable,
 									vm_initializer *init, void *aux)
 {
-
 	ASSERT(VM_TYPE(type) != VM_UNINIT)
-
-	struct supplemental_page_table *spt = &thread_current()->spt;
-
-	/* Check wheter the upage is already occupied or not. */
-	if (spt_find_page(spt, upage) == NULL)
+	/* VM_UNINIT */
+	bool (*page_initializer)(struct page *, enum vm_type, void *) = NULL;
+	switch (VM_TYPE(type)) 
 	{
-		/* TODO: Create the page, fetch the initialier according to the VM type,
-		 * TODO: and then create "uninit" page struct by calling uninit_new. You
-		 * TODO: should modify the field after calling the uninit_new. */
+    	case VM_ANON: page_initializer = anon_initializer; break;
+    	case VM_FILE: page_initializer = file_backed_initializer; break;
+    	default: goto err;
+	}
+	/* Check whether the upage is already occupied or not. */
+	struct supplemental_page_table *spt = &thread_current()->spt;
+	if (spt_find_page(spt, upage) == NULL)
+	{	
+		
+		/* TODO: Create the page,
+		fetch the initialier according to the VM type,*/
+		struct page *pp = malloc(sizeof *pp);
+		if (pp == NULL)
+		{
+			goto err;
+		}
+		/* TODO: and then create "uninit" page struct by calling uninit_new.
+		  You should modify the field after calling the uninit_new. */
+		uninit_new(pp, upage, init, type, aux, page_initializer); 
 
 		/* TODO: Insert the page into the spt. */
+		if (!spt_insert_page(spt, pp)) 
+		{
+        	vm_dealloc_page(pp);
+        	goto err;
+    	}
+		return true;
 	}
 err:
 	return false;
