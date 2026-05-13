@@ -41,6 +41,7 @@ vm_init (void) {
 #ifdef EFILESYS /* For project 4 */
 	pagecache_init ();
 #endif
+	// register_inspect_intr () 실행시 interrupt를 꺼 둔 상태로 진입함
 	register_inspect_intr ();
 	/* DO NOT MODIFY UPPER LINES. */
 	/* TODO: Your code goes here. */
@@ -219,12 +220,34 @@ vm_handle_wp (struct page *page UNUSED) {
 
 /* Return true on success */
 bool
-vm_try_handle_fault (struct intr_frame *f UNUSED, void *addr UNUSED,
-                     bool user UNUSED, bool write UNUSED, bool not_present UNUSED) {
-	struct supplemental_page_table *spt UNUSED = &thread_current ()->spt;
+vm_try_handle_fault (struct intr_frame *f UNUSED, void *addr, bool user UNUSED, bool write, bool not_present) {
+	struct supplemental_page_table *spt = &thread_current ()->spt;
 	struct page *page = NULL;
-	/* TODO: Validate the fault */
-	/* TODO: Your code goes here */
+
+	/* Validate the fault */
+	// 입력값 검증 로직
+
+	/* 주소 검증 */
+	if (addr == NULL || !is_user_vaddr (addr))
+		return false;
+
+	/* 권한 위반 fault는 현재 단계에서 복구하지 않는다. */
+	if (!not_present) // not_present 가 false이면 '페이지는 있는데 권한 위반'
+		return false;
+
+	/* SPT에 등록된 lazy page인지 확인 */
+	page = spt_find_page (spt, addr);
+	if (page == NULL) {
+		/* todo: (차후) page == NULL일 때 stack growth 후보인지 검사하는 로직 추가.
+		stack growth 후보이면 확장 시도 기회를 주어야 함. */
+		return false;
+	}
+
+	/* read-only page에 write한 경우는 복구하면 안 된다. */
+	if (write && !page->writable)
+		return false;
+
+	// todo: 차후 f 와 user 사용시 검증 로직에 추가
 
 	return vm_do_claim_page (page);
 }
