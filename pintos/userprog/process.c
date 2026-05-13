@@ -1467,13 +1467,27 @@ struct lazy_load_aux
 	size_t page_zero_bytes;
 };
 
+/* lazy load 시 실행 파일의 segment 내용을 실제 frame에 채우는 함수. 성공 여부 반환 */
 static bool
 lazy_load_segment(struct page *page, void *aux)
 {
-	/* TODO: Load the segment from the file */
+	/*  Load the segment from the file */
 	struct lazy_load_aux *lla = aux;
-	/* TODO: This called when the first page fault occurs on address VA. */
-	/* TODO: VA is available when calling this function. */
+
+	/*TODO: deadlock에 대한 대비 필요 - syscall 수정 */
+	/* This called when the first page fault occurs on address VA. */
+	uint8_t *kva = page->frame->kva;
+	lock_acquire(&filesys_lock);
+	off_t bytes_read = file_read_at(lla->file, kva, lla->page_read_bytes, lla->ofs);
+	lock_release(&filesys_lock);
+	if(bytes_read  != (off_t) lla->page_read_bytes) {
+		free(lla);
+		return false;
+	}
+
+	/* VA is available when calling this function. */
+	memset(kva + lla->page_read_bytes, 0, lla->page_zero_bytes);
+	free(lla);
 	return true;
 }
 
@@ -1517,8 +1531,9 @@ load_segment(struct file *file, off_t ofs, uint8_t *upage,
 		aux->page_read_bytes = page_read_bytes;
 		aux->page_zero_bytes = page_zero_bytes;
 
-		if (!vm_alloc_page_with_initializer(VM_ANON, upage,
-											writable, lazy_load_segment, aux))
+		/* upage가 이미 SPT에 등록되어 있지 않다면 lazy load용 uninit page를 등록한다.
+			등록 실패 시 aux는 이 함수에서 직접 해제한다. */
+		if (!vm_alloc_page_with_initializer(VM_ANON, upage, writable, lazy_load_segment, aux))
 		{
 			free(aux);
 			return false;
