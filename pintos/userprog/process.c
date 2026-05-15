@@ -824,6 +824,10 @@ process_exec (void *f_name) {
 	   성공하면 do_iret()로 user mode에 진입하므로 이 함수는 호출자에게 돌아오지 않는다. */
 	process_cleanup ();
 
+#ifdef VM
+	supplemental_page_table_init (&cur->spt);
+#endif
+
 	/* And then load the binary */
 	success = load (file_name, &_if);
 

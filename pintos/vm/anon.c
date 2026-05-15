@@ -143,4 +143,6 @@ anon_destroy (struct page *page) {
 		anon_page->slot_idx = BITMAP_ERROR;
 		anon_page->in_swapdisk = false;
 	}
+
+	vm_cleanup_page_frame (page); // 프레임 제거 함수
 }

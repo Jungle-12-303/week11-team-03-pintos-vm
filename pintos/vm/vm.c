@@ -337,6 +337,18 @@ vm_dealloc_page (struct page *page) {
 	free (page);
 }
 
+/* [헬퍼 함수] frame을 정리하는 함수 */
+void
+vm_cleanup_page_frame (struct page *page) {
+	if (page->frame == NULL)
+		return;
+
+	pml4_clear_page (thread_current ()->pml4, page->va);
+	palloc_free_page (page->frame->kva);
+	free (page->frame);
+	page->frame = NULL;
+}
+
 /* Claim the page that allocate on VA. */
 bool
 vm_claim_page (void *va) {
@@ -400,9 +412,20 @@ supplemental_page_table_copy (struct supplemental_page_table *dst UNUSED,
                               struct supplemental_page_table *src UNUSED) {
 }
 
+// [헬퍼 함수] SPT hash table 안의 page 하나를 꺼내서 실제로 해제
+static void
+spt_destroy_page (struct hash_elem *e, void *aux UNUSED) {
+	struct page *page = hash_entry (e, struct page, hash_elem); // struct page * 복원
+	vm_dealloc_page (page);                                     // vm_dealloc_page 안에서 destroy 실행. destroy 안에서 페이지 종류에 따라 분기 후 물리 프레임 제거
+}
+
 /* Free the resource hold by the supplemental page table */
+// 현재 프로세스의 SPT 안에 들어 있는 모든 page를 제거/해제한다.
 void
-supplemental_page_table_kill (struct supplemental_page_table *spt UNUSED) {
-	/* TODO: Destroy all the supplemental_page_table hold by thread and
-	 * TODO: writeback all the modified contents to the storage. */
+supplemental_page_table_kill (struct supplemental_page_table *spt) {
+	/* Destroy all the supplemental_page_table hold by thread and
+	 * writeback all the modified contents to the storage. */
+
+	// hash_destroy()에 callback을 넘긴다.
+	hash_destroy (&spt->spt_hash, spt_destroy_page);
 }
