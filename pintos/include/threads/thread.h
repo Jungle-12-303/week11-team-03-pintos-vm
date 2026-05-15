@@ -149,6 +149,7 @@ struct thread {
 #ifdef VM
 	/* Table for whole virtual memory owned by thread. */
 	struct supplemental_page_table spt;
+	void *user_rsp; // 스레드의 사용자 모드에서 실행 중이던 프로그램의 stack pointer 값을 저장해두는 필드
 #endif
 
 	/* Owned by thread.c. */

@@ -19,7 +19,12 @@
 
 void syscall_entry (void);
 void syscall_handler (struct intr_frame *);
+#ifndef VM
 static bool user_addr_mapped (const void *uaddr);
+#endif
+/* syscall 처리 중 커널이 user address를 읽거나 쓸 수 있는지 검사한다.
+   VM 빌드에서는 lazy claim과 stack growth까지 처리한다. */
+static bool user_addr_accessible_for_syscall (const void *uaddr, bool write);
 
 struct lock filesys_lock;
 
@@ -51,6 +56,7 @@ syscall_init (void) {
 	           FLAG_IF | FLAG_TF | FLAG_DF | FLAG_IOPL | FLAG_AC | FLAG_NT);
 }
 
+#ifndef VM
 /* 주소 하나가 유효한 user virtual address인지 검사 */
 static bool
 user_addr_mapped (const void *uaddr) {
@@ -62,20 +68,57 @@ user_addr_mapped (const void *uaddr) {
 	       // &&은 short-circuit이므로, 순차적으로 조건을 검사하다가 위 조건을 만족하지 못하면 아래 조건은 검사하지 않음
 	       && pml4_get_page (cur->pml4, uaddr) != NULL; // 페이지 테이블에 실제로 매핑된 주소이면 True
 }
+#endif
+
+/* [헬퍼 함수]
+    syscall 처리 중 커널이 user address에 접근할 수 있는지 검사한다.
+    VM 빌드에서는 lazy claim과 stack growth까지 처리한다. */
+static bool
+user_addr_accessible_for_syscall (const void *uaddr, bool write) {
+#ifdef VM
+	struct thread *cur = thread_current ();
+	struct page *page;
+
+	if (uaddr == NULL || !is_user_vaddr (uaddr) || cur->pml4 == NULL)
+		return false;
+
+	page = spt_find_page (&cur->spt, (void *) uaddr);
+
+	if (page != NULL) {
+		if (write && !page->writable)
+			return false;
+
+		if (pml4_get_page (cur->pml4, uaddr) == NULL)
+			return vm_claim_page ((void *) pg_round_down (uaddr));
+
+		return true;
+	}
+
+	if (pml4_get_page (cur->pml4, uaddr) != NULL)
+		return true;
+
+	return vm_try_handle_fault (NULL, (void *) uaddr, false, write, true);
+#else
+	return user_addr_mapped (uaddr);
+#endif
+}
 
 /* 주소가 유효하지 않으면 현재 process를 exit(-1)하는 공개 검증 함수 */
 void
-user_check_ptr (const void *uaddr) {
-	if (!user_addr_mapped (uaddr))
+user_check_ptr (const void *uaddr, bool write) {
+	/*
+	    write == true: 커널이 user address에 쓸 예정
+	    write == false: 커널이 user address을 읽을 예정
+	*/
+	if (!user_addr_accessible_for_syscall (uaddr, write))
 		process_exit_with_status (-1);
 }
 
 /* 이하는 syscall 종류에 맞게 user_check_ptr()를 반복/조합해서 쓰는 상위 helper 함수*/
 
-/* user buffer를 커널이 읽을 때 검증
-   write(fd, buffer, size)에서 buffer 검증 */
-void
-user_check_read (const void *uaddr, size_t size) {
+// [헬퍼 함수] user_check_read, user_check_write 에서 사용
+static void
+user_check_buffer (const void *uaddr, size_t size, bool write) {
 	uint64_t start;
 	uint64_t last;
 	uint64_t page;
@@ -88,21 +131,31 @@ user_check_read (const void *uaddr, size_t size) {
 	start = (uint64_t) uaddr;
 	last = start + size - 1;
 
-	if (last < start) // 오버플로우 검사
+	// 오버플로우 검사
+	if (last < start)
 		process_exit_with_status (-1);
 
+	// range 전체를 page 단위로 순회
 	for (page = (uint64_t) pg_round_down ((void *) start); // 버퍼의 시작 주소가 속한 페이지의 시작 위치
 	     page <= (uint64_t) pg_round_down ((void *) last); // 버퍼의 마지막 주소가 속한 페이지의 시작 위치
-	     page += PGSIZE)                                   // 페이지 사이즈만큼 증가
-		user_check_ptr ((const void *) page);              // pml4_get_page()를 통해 page 주소가 현재 스레드의 pml4에서 찾을 수 있는지 확인, 찾을 수 없다면 프로세스 종료 (-1)
+	     page += PGSIZE) {
+		// syscall에서 접근할 user buffer page를 검증한다.
+		user_check_ptr ((const void *) page, write);
+	}
+}
+
+/* user buffer를 커널이 읽을 때 검증
+   write(fd, buffer, size)에서 buffer 검증 */
+void
+user_check_read (const void *uaddr, size_t size) {
+	user_check_buffer (uaddr, size, false);
 }
 
 /* 커널이 user buffer에 써야 할 때 검증
    read(fd, buffer, size)에서 buffer 검증 */
 void
-
 user_check_write (void *uaddr, size_t size) {
-	user_check_read (uaddr, size);
+	user_check_buffer (uaddr, size, true);
 }
 
 /* user가 넘긴 C 문자열 검증
@@ -111,8 +164,8 @@ void
 user_check_string (const char *uaddr) {
 	const char *p;
 
-	for (p = uaddr;; p++) { // 문자열 끝까지 검사
-		user_check_ptr (p); // 특정 문자의 주소가 오류가 있는 경우 프로세스 종료
+	for (p = uaddr;; p++) {        // 문자열 끝까지 검사
+		user_check_ptr (p, false); // 특정 문자의 주소가 오류가 있는 경우 프로세스 종료
 		if (*p == '\0')
 			return;
 	}
@@ -130,7 +183,7 @@ user_strdup (const char *uaddr) {
 		process_exit_with_status (-1);
 
 	for (i = 0; i < PGSIZE; i++) { // 안전하게 한 글자씩 검사하면서 복사
-		user_check_ptr (uaddr + i);
+		user_check_ptr (uaddr + i, false);
 		copy[i] = uaddr[i];
 		if (copy[i] == '\0')
 			return copy;
@@ -144,6 +197,9 @@ user_strdup (const char *uaddr) {
 /* 커널이 syscall 요청을 받아 실제로 처리하는 dispatcher */
 void
 syscall_handler (struct intr_frame *f) {
+#ifdef VM
+	thread_current ()->user_rsp = (void *) f->rsp;
+#endif
 	// x86-64 호출 규약에서 함수 반환값은 RAX 레지스터에 두어야 합니다. 반환값이 있는 시스템 콜은 struct intr_frame의 rax 멤버를 수정해 이를 구현할 수 있습니다.
 
 	switch (f->R.rax) {
