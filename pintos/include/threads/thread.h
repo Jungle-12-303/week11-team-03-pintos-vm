@@ -11,7 +11,9 @@
 
 #ifdef USERPROG
 struct child_status;
+struct fd_entry;
 struct file;
+#define PROCESS_MAX_FD 512
 #endif
 struct lock;
 
@@ -140,7 +142,7 @@ struct thread {
 	/* Owned by userprog/process.c. */
 	uint64_t *pml4; /* Page map level 4 */
 	int exit_status;
-	struct list fd_table;            /* Per-process file descriptors. */
+	struct fd_entry **fd_table;      /* Per-process file descriptors. */
 	int next_fd;                     /* Next fd number for regular files. */
 	struct list children;            /* Direct child process states. */
 	struct child_status *child_info; /* State shared with this process's parent. */
