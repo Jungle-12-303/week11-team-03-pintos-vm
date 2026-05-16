@@ -1376,7 +1376,47 @@ struct lazy_load_aux {
 	off_t ofs;
 	size_t page_read_bytes;
 	size_t page_zero_bytes;
+	bool owns_file;
 };
+
+void *
+lazy_load_aux_duplicate (void *aux_) {
+	struct lazy_load_aux *aux = aux_;
+	struct lazy_load_aux *copy = malloc (sizeof *copy);
+	if (copy == NULL)
+		return NULL;
+
+	copy->ofs = aux->ofs;
+	copy->page_read_bytes = aux->page_read_bytes;
+	copy->page_zero_bytes = aux->page_zero_bytes;
+	copy->owns_file = true;
+
+	lock_acquire (&filesys_lock);
+	copy->file = file_duplicate (aux->file);
+	lock_release (&filesys_lock);
+
+	if (copy->file == NULL) {
+		free (copy);
+		return NULL;
+	}
+
+	return copy;
+}
+
+void
+lazy_load_aux_destroy (void *aux_) {
+	struct lazy_load_aux *aux = aux_;
+	if (aux == NULL)
+		return;
+
+	if (aux->owns_file && aux->file != NULL) {
+		lock_acquire (&filesys_lock);
+		file_close (aux->file);
+		lock_release (&filesys_lock);
+	}
+
+	free (aux);
+}
 
 /* lazy load 시 실행 파일의 segment 내용을 실제 frame에 채우는 함수. 성공 여부 반환 */
 static bool
@@ -1391,13 +1431,13 @@ lazy_load_segment (struct page *page, void *aux) {
 	off_t bytes_read = file_read_at (lla->file, kva, lla->page_read_bytes, lla->ofs);
 	lock_release (&filesys_lock);
 	if (bytes_read != (off_t) lla->page_read_bytes) {
-		free (lla);
+		lazy_load_aux_destroy (lla);
 		return false;
 	}
 
 	/* VA is available when calling this function. */
 	memset (kva + lla->page_read_bytes, 0, lla->page_zero_bytes);
-	free (lla);
+	lazy_load_aux_destroy (lla);
 	return true;
 }
 
@@ -1438,11 +1478,12 @@ load_segment (struct file *file, off_t ofs, uint8_t *upage,
 		aux->ofs = ofs;
 		aux->page_read_bytes = page_read_bytes;
 		aux->page_zero_bytes = page_zero_bytes;
+		aux->owns_file = false;
 
 		/* upage가 이미 SPT에 등록되어 있지 않다면 lazy load용 uninit page를 등록한다.
 		    등록 실패 시 aux는 이 함수에서 직접 해제한다. */
 		if (!vm_alloc_page_with_initializer (VM_ANON, upage, writable, lazy_load_segment, aux)) {
-			free (aux);
+			lazy_load_aux_destroy (aux);
 			return false;
 		}
 

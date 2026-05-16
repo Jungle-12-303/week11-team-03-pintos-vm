@@ -7,6 +7,9 @@
 
 struct file;
 
+void *lazy_load_aux_duplicate (void *aux);
+void lazy_load_aux_destroy (void *aux);
+
 struct child_status {
 	tid_t tid;                  // 자식 thread의 id
 	int exit_status;            // 자식의 종료 상태 - 자식이 exit(status) 하거나 예외로 죽으면 이 값이 기록되고 부모의 wait()가 이 값을 반환

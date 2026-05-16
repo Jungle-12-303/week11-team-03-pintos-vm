@@ -10,6 +10,7 @@
 
 #include "vm/vm.h"
 #include "vm/uninit.h"
+#include "userprog/process.h"
 
 static bool uninit_initialize (struct page *page, void *kva);
 static void uninit_destroy (struct page *page);
@@ -69,7 +70,7 @@ uninit_destroy (struct page *page UNUSED) {
 	 * TODO: If you don't have anything to do, just return. */
 	// todo: 나중에 uninit->aux에 따로 malloc()한 구조체를 넣는다면 그 aux는 여기서 정리 가능
 	if (uninit->aux != NULL)
-		free (uninit->aux);
+		lazy_load_aux_destroy (uninit->aux);
 
 	return;
 }

@@ -7,8 +7,17 @@
 #include "threads/vaddr.h"
 #include "threads/mmu.h"
 #include "threads/palloc.h"
+#include "threads/synch.h"
+#include "userprog/process.h"
+#include <list.h>
+#include <string.h>
 
 #define USER_STACK_MAX_SIZE (1 << 20)
+
+static struct list frame_table;
+static struct lock frame_lock;
+
+static void vm_frame_table_init (void);
 
 // (참고) stack growth가 동작하면 fault 주소가 속한 4KB page 하나를 새 anonymous page로 만들고, 그 frame을 0으로 채워 초기화한다.
 
@@ -103,6 +112,7 @@ vm_init (void) {
 	register_inspect_intr ();
 	/* DO NOT MODIFY UPPER LINES. */
 	/* TODO: Your code goes here. */
+	vm_frame_table_init ();
 }
 
 /* Get the type of the page. This function is useful if you want to know the
@@ -123,6 +133,9 @@ page_get_type (struct page *page) {
 static struct frame *vm_get_victim (void);
 static bool vm_do_claim_page (struct page *page);
 static struct frame *vm_evict_frame (void);
+static void vm_register_frame (struct frame *frame);
+static void vm_unregister_frame (struct frame *frame);
+static void vm_free_frame (struct frame *frame);
 
 /* Create the pending page object with initializer. If you want to create a
  * page, do not create it directly and make it through this function or
@@ -238,6 +251,38 @@ vm_evict_frame (void) {
 	return NULL;
 }
 
+static void
+vm_frame_table_init (void) {
+	list_init (&frame_table);
+	lock_init (&frame_lock);
+}
+
+static void
+vm_register_frame (struct frame *frame) {
+	lock_acquire (&frame_lock);
+	list_push_back (&frame_table, &frame->elem);
+	lock_release (&frame_lock);
+}
+
+static void
+vm_unregister_frame (struct frame *frame) {
+	lock_acquire (&frame_lock);
+	list_remove (&frame->elem);
+	lock_release (&frame_lock);
+}
+
+static void
+vm_free_frame (struct frame *frame) {
+	if (frame == NULL)
+		return;
+
+	if (frame->page != NULL && frame->page->frame == frame)
+		frame->page->frame = NULL;
+	if (frame->kva != NULL)
+		palloc_free_page (frame->kva);
+	free (frame);
+}
+
 /* palloc() and get frame. If there is no available page, evict the page
  * and return it. This always return valid address. That is, if the user pool
  * memory is full, this function evicts the frame to get the available memory
@@ -345,10 +390,10 @@ vm_cleanup_page_frame (struct page *page) {
 	if (page->frame == NULL)
 		return;
 
+	struct frame *frame = page->frame;
 	pml4_clear_page (thread_current ()->pml4, page->va);
-	palloc_free_page (page->frame->kva);
-	free (page->frame);
-	page->frame = NULL;
+	vm_unregister_frame (frame);
+	vm_free_frame (frame);
 }
 
 /* Claim the page that allocate on VA. */
@@ -381,23 +426,18 @@ vm_do_claim_page (struct page *page) {
 	bool succ = pml4_set_page (thread_current ()->pml4,
 	                           page->va, frame->kva, page->writable);
 	if (!succ) {
-		frame->page = NULL;
-		page->frame = NULL;
-		palloc_free_page (frame->kva);
-		free (frame);
+		vm_free_frame (frame);
 		return false;
 	}
 
 	succ = swap_in (page, frame->kva);
 	if (!succ) {
 		pml4_clear_page (thread_current ()->pml4, page->va);
-		frame->page = NULL;
-		page->frame = NULL;
-		palloc_free_page (frame->kva);
-		free (frame);
+		vm_free_frame (frame);
 		return false;
 	}
 
+	vm_register_frame (frame);
 	return true;
 }
 
@@ -410,8 +450,61 @@ supplemental_page_table_init (struct supplemental_page_table *spt) {
 
 /* Copy supplemental page table from src to dst */
 bool
-supplemental_page_table_copy (struct supplemental_page_table *dst UNUSED,
-                              struct supplemental_page_table *src UNUSED) {
+supplemental_page_table_copy (struct supplemental_page_table *dst,
+                              struct supplemental_page_table *src) {
+	struct hash_iterator iter;
+	hash_first (&iter, &src->spt_hash);
+
+	while (hash_next (&iter)) {
+		struct page *page = hash_entry (hash_cur (&iter), struct page, hash_elem);
+
+		switch (VM_TYPE (page->operations->type)) {
+		case VM_UNINIT: {
+			void *aux = NULL;
+			if (page->uninit.aux != NULL) {
+				aux = lazy_load_aux_duplicate (page->uninit.aux);
+				if (aux == NULL)
+					return false;
+			}
+
+			if (!vm_alloc_page_with_initializer (page->uninit.type, page->va,
+			                                     page->writable, page->uninit.init, aux)) {
+				lazy_load_aux_destroy (aux);
+				return false;
+			}
+			break;
+		}
+		case VM_ANON: {
+			if (page->frame == NULL)
+				return false;
+			if (!vm_alloc_page (VM_ANON, page->va, page->writable))
+				return false;
+			if (!vm_claim_page (page->va)) {
+				struct page *child_page = spt_find_page (dst, page->va);
+				if (child_page != NULL)
+					spt_remove_page (dst, child_page);
+				return false;
+			}
+
+			struct page *child_page = spt_find_page (dst, page->va);
+			if (child_page == NULL)
+				return false;
+			if (child_page->frame == NULL) {
+				spt_remove_page (dst, child_page);
+				return false;
+			}
+
+			memcpy (child_page->frame->kva, page->frame->kva, PGSIZE);
+			break;
+		}
+		case VM_FILE:
+			break;
+		default:
+			return false;
+		}
+	}
+
+	return true;
 }
 
 // [헬퍼 함수] SPT hash table 안의 page 하나를 꺼내서 실제로 해제
