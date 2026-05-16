@@ -472,6 +472,14 @@ supplemental_page_table_copy (struct supplemental_page_table *dst,
 				lazy_load_aux_destroy (aux);
 				return false;
 			}
+
+			struct page *child_page = spt_find_page (dst, page->va);
+			if (child_page == NULL)
+				return false;
+			if (!vm_claim_page (page->va)) {
+				spt_remove_page (dst, child_page);
+				return false;
+			}
 			break;
 		}
 		case VM_ANON: {
