@@ -8,9 +8,14 @@
 #include "threads/mmu.h"
 #include "threads/palloc.h"
 #include <string.h>
+#include "threads/synch.h"
 
 #define USER_STACK_MAX_SIZE (1 << 20)
 #define PGSIZE              (1 << PGBITS)
+
+/* 프레임 관련 전역 구조체 */
+static struct list frame_table;
+static struct lock frame_lock;
 
 // (참고) stack growth가 동작하면 fault 주소가 속한 4KB page 하나를 새 anonymous page로 만들고, 그 frame을 0으로 채워 초기화한다.
 
@@ -33,6 +38,13 @@
     5) CPU가 원래 push 명령 재시도
     6) 그때 rsp가 8바이트 감소
 */
+
+/* frame table과 frame lock을 초기화한다. */
+static void
+vm_frame_table_init (void) {
+	list_init (&frame_table);
+	lock_init (&frame_lock);
+}
 
 // [헬퍼 함수] SPT hash table 안의 page 하나를 꺼내서 실제로 해제
 static void
@@ -112,6 +124,7 @@ vm_init (void) {
 	register_inspect_intr ();
 	/* DO NOT MODIFY UPPER LINES. */
 	/* TODO: Your code goes here. */
+	vm_frame_table_init ();
 }
 
 /* Get the type of the page. This function is useful if you want to know the
@@ -272,7 +285,32 @@ vm_get_frame (void) {
 	ASSERT (frame->page == NULL);
 	ASSERT (frame->kva != NULL);
 
+	lock_acquire (&frame_lock);
+	list_push_back (&frame_table, &frame->elem);
+	lock_release (&frame_lock);
+
 	return frame;
+}
+
+/* [헬퍼 함수] FRAME을 전역 frame table에서 제거하고 물리 페이지를 반납한다. */
+static void
+vm_free_frame (struct frame *frame) {
+	struct page *page;
+	if (frame == NULL)
+		return;
+
+	page = frame->page;
+	if (page != NULL && page->frame == frame) {
+		page->frame = NULL;
+		frame->page = NULL;
+	}
+
+	lock_acquire (&frame_lock);
+	list_remove (&frame->elem);
+	lock_release (&frame_lock);
+
+	palloc_free_page (frame->kva);
+	free (frame);
 }
 
 /* Growing the stack. */
@@ -355,9 +393,7 @@ vm_cleanup_page_frame (struct page *page) {
 		return;
 
 	pml4_clear_page (thread_current ()->pml4, page->va);
-	palloc_free_page (page->frame->kva);
-	free (page->frame);
-	page->frame = NULL;
+	vm_free_frame (page->frame);
 }
 
 /* Claim the page that allocate on VA. */
@@ -390,20 +426,14 @@ vm_do_claim_page (struct page *page) {
 	bool succ = pml4_set_page (thread_current ()->pml4,
 	                           page->va, frame->kva, page->writable);
 	if (!succ) {
-		frame->page = NULL;
-		page->frame = NULL;
-		palloc_free_page (frame->kva);
-		free (frame);
+		vm_free_frame (frame);
 		return false;
 	}
 
 	succ = swap_in (page, frame->kva);
 	if (!succ) {
 		pml4_clear_page (thread_current ()->pml4, page->va);
-		frame->page = NULL;
-		page->frame = NULL;
-		palloc_free_page (frame->kva);
-		free (frame);
+		vm_free_frame (frame);
 		return false;
 	}
 
