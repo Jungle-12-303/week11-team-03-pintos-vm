@@ -8,6 +8,8 @@
 #include "threads/mmu.h"
 #include "threads/palloc.h"
 
+#define USER_STACK_MAX_SIZE (1 << 20)
+
 // (참고) stack growth가 동작하면 fault 주소가 속한 4KB page 하나를 새 anonymous page로 만들고, 그 frame을 0으로 채워 초기화한다.
 
 /* stack growth가 필요한 경우:
@@ -43,7 +45,7 @@ is_stack_growth_candidate (void *addr, void *rsp) {
 	uint8_t *fault_addr = addr;
 	uint8_t *stack_ptr = rsp;
 	uint8_t *stack_top = (uint8_t *) USER_STACK;   // 사용자 스택 상한
-	uint8_t *stack_bottom = stack_top - (1 << 20); // 사용자 스택 하한
+	uint8_t *stack_bottom = stack_top - USER_STACK_MAX_SIZE; // 사용자 스택 하한
 
 	// 주소가 사용자 스택 하한 이상, 상한 미만 범위 안에 있어야 함.
 	if (fault_addr < stack_bottom || fault_addr >= stack_top)
@@ -54,7 +56,7 @@ is_stack_growth_candidate (void *addr, void *rsp) {
 		return false;
 
 	// 실제 검증 조건
-	if (fault_addr < stack_ptr - 8)
+	if (fault_addr < stack_ptr - sizeof (char *))
 		return false;
 	/* rsp-8 보다 아래쪽은 거부하고 그 이상은 정상적인 근방으로서 허용한다.
 	    함수가 지역 변수를 쓰거나 push를 하면 stack pointer 주변이나 조금 아래 주소에 접근하는데,
@@ -293,7 +295,7 @@ vm_handle_wp (struct page *page UNUSED) {
 
 /* Return true on success */
 bool
-vm_try_handle_fault (struct intr_frame *f UNUSED, void *addr, bool user, bool write, bool not_present) {
+vm_try_handle_fault (struct intr_frame *f, void *addr, bool user, bool write, bool not_present) {
 	struct supplemental_page_table *spt = &thread_current ()->spt;
 	struct page *page = NULL;
 
@@ -312,7 +314,7 @@ vm_try_handle_fault (struct intr_frame *f UNUSED, void *addr, bool user, bool wr
 	page = spt_find_page (spt, addr);
 	if (page == NULL) {
 		/* stack growth 후보인지 검사하는 로직. stack growth 후보이면 확장 시도 기회를 주어야 함. */
-		void *rsp = user ? (void *) f->rsp : thread_current ()->user_rsp;
+		void *rsp = user ? (void *) f->rsp : (void *) thread_current ()->saved_user_rsp;
 
 		if (is_stack_growth_candidate (addr, rsp))
 			return vm_stack_growth (addr);

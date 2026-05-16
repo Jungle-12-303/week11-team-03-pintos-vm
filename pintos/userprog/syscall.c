@@ -198,7 +198,7 @@ user_strdup (const char *uaddr) {
 void
 syscall_handler (struct intr_frame *f) {
 #ifdef VM
-	thread_current ()->user_rsp = (void *) f->rsp;
+	thread_current ()->saved_user_rsp = f->rsp;
 #endif
 	// x86-64 호출 규약에서 함수 반환값은 RAX 레지스터에 두어야 합니다. 반환값이 있는 시스템 콜은 struct intr_frame의 rax 멤버를 수정해 이를 구현할 수 있습니다.
 
