@@ -136,11 +136,15 @@ user_check_buffer (const void *uaddr, size_t size, bool write) {
 		process_exit_with_status (-1);
 
 	// range 전체를 page 단위로 순회
-	for (page = (uint64_t) pg_round_down ((void *) start); // 버퍼의 시작 주소가 속한 페이지의 시작 위치
-	     page <= (uint64_t) pg_round_down ((void *) last); // 버퍼의 마지막 주소가 속한 페이지의 시작 위치
+	for (page = (uint64_t) pg_round_down ((void *) start);
+	     page <= (uint64_t) pg_round_down ((void *) last);
 	     page += PGSIZE) {
-		// syscall에서 접근할 user buffer page를 검증한다.
-		user_check_ptr ((const void *) page, write);
+		void *check_addr = (void *) page;
+
+		if (page == (uint64_t) pg_round_down ((void *) start))
+			check_addr = (void *) start;
+
+		user_check_ptr (check_addr, write);
 	}
 }
 
