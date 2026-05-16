@@ -7,8 +7,10 @@
 #include "threads/vaddr.h"
 #include "threads/mmu.h"
 #include "threads/palloc.h"
+#include <string.h>
 
 #define USER_STACK_MAX_SIZE (1 << 20)
+#define PGSIZE              (1 << PGBITS)
 
 // (참고) stack growth가 동작하면 fault 주소가 속한 4KB page 하나를 새 anonymous page로 만들고, 그 frame을 0으로 채워 초기화한다.
 
@@ -32,6 +34,13 @@
     6) 그때 rsp가 8바이트 감소
 */
 
+// [헬퍼 함수] SPT hash table 안의 page 하나를 꺼내서 실제로 해제
+static void
+spt_destroy_page (struct hash_elem *e, void *aux UNUSED) {
+	struct page *page = hash_entry (e, struct page, hash_elem); // struct page * 복원
+	vm_dealloc_page (page);                                     // vm_dealloc_page 안에서 destroy 실행. destroy 안에서 페이지 종류에 따라 분기 후 물리 프레임 제거
+}
+
 // [헬퍼 함수] stack growth 대상인지 판정하는 함수
 static bool
 is_stack_growth_candidate (void *addr, void *rsp) {
@@ -44,7 +53,7 @@ is_stack_growth_candidate (void *addr, void *rsp) {
 
 	uint8_t *fault_addr = addr;
 	uint8_t *stack_ptr = rsp;
-	uint8_t *stack_top = (uint8_t *) USER_STACK;   // 사용자 스택 상한
+	uint8_t *stack_top = (uint8_t *) USER_STACK;             // 사용자 스택 상한
 	uint8_t *stack_bottom = stack_top - USER_STACK_MAX_SIZE; // 사용자 스택 하한
 
 	// 주소가 사용자 스택 하한 이상, 상한 미만 범위 안에 있어야 함.
@@ -408,17 +417,97 @@ supplemental_page_table_init (struct supplemental_page_table *spt) {
 	           &hash_func, &hash_less, NULL);
 }
 
-/* Copy supplemental page table from src to dst */
-bool
-supplemental_page_table_copy (struct supplemental_page_table *dst UNUSED,
-                              struct supplemental_page_table *src UNUSED) {
+static bool
+duplicate_page (struct supplemental_page_table *dst,
+                struct page *src_page) {
+	ASSERT (src_page != NULL);
+	bool succ = true;
+
+	// uninit/lazy page VS loaded page를 분기
+	if (src_page->operations->type == VM_UNINIT) {
+		//  lazy/uninit 정보를 보존해서 자식 page를 만들거나, 문서 요구대로 claim할 수 있게 aux 복제 전략 필요
+
+		// 1. aux 복제
+		struct lazy_load_aux *src_aux = (struct lazy_load_aux *) (src_page->uninit.aux);
+		if (src_aux == NULL)
+			return false;
+
+		struct lazy_load_aux *dst_aux = malloc (sizeof (struct lazy_load_aux));
+		if (dst_aux == NULL)
+			return false;
+
+		dst_aux->file = file_reopen (src_aux->file);
+		if (dst_aux->file == NULL) {
+			free (dst_aux);
+			return false;
+		}
+
+		dst_aux->ofs = src_aux->ofs;
+		dst_aux->page_read_bytes = src_aux->page_read_bytes;
+		dst_aux->page_zero_bytes = src_aux->page_zero_bytes;
+
+		succ = vm_alloc_page_with_initializer (page_get_type (src_page), src_page->va, src_page->writable, src_page->uninit.init, dst_aux);
+		if (!succ) {
+			file_close (dst_aux->file);
+			free (dst_aux);
+			return false;
+		}
+
+		struct page *dst_page = spt_find_page (dst, src_page->va);
+		succ = vm_claim_page (src_page->va);
+		if (!succ) {
+			file_close (dst_aux->file);
+			spt_destroy_page (&dst_page->hash_elem, NULL);
+			return false;
+		}
+
+		return true;
+	} else {
+		//  현재 스레드는 자식 스레드이므로, vm_alloc_page하는 spt는 자식 스레드의 spt이다
+		succ = vm_alloc_page (page_get_type (src_page), src_page->va, src_page->writable);
+		if (!succ)
+			return false;
+
+		// 자식 page claim 후 frame 내용 PGSIZE 복사
+		succ = vm_claim_page (src_page->va);
+		if (!succ)
+			return false;
+
+		struct page *dst_page = spt_find_page (dst, src_page->va);
+
+		// 프레임 확인
+		ASSERT (src_page);
+		if (src_page->frame == NULL)
+			return false;
+		ASSERT (src_page->frame->kva);
+
+		if (dst_page == NULL || dst_page->frame == NULL)
+			return false;
+		ASSERT (dst_page->frame->kva);
+
+		// 프레임 복사
+		memcpy (dst_page->frame->kva, src_page->frame->kva, PGSIZE);
+
+		return succ;
+	}
 }
 
-// [헬퍼 함수] SPT hash table 안의 page 하나를 꺼내서 실제로 해제
-static void
-spt_destroy_page (struct hash_elem *e, void *aux UNUSED) {
-	struct page *page = hash_entry (e, struct page, hash_elem); // struct page * 복원
-	vm_dealloc_page (page);                                     // vm_dealloc_page 안에서 destroy 실행. destroy 안에서 페이지 종류에 따라 분기 후 물리 프레임 제거
+/* Copy supplemental page table from src to dst */
+bool
+supplemental_page_table_copy (struct supplemental_page_table *dst,
+                              struct supplemental_page_table *src) {
+	ASSERT (dst != NULL);
+	ASSERT (src != NULL);
+
+	// 버킷을 순회하며 복사해주기
+	struct hash_iterator i;
+	hash_first (&i, &src->spt_hash);
+	while (hash_next (&i)) {
+		struct page *p = hash_entry (hash_cur (&i), struct page, hash_elem);
+		if (duplicate_page (dst, p) == false)
+			return false;
+	}
+	return true;
 }
 
 /* Free the resource hold by the supplemental page table */
