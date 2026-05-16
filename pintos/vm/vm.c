@@ -436,7 +436,7 @@ duplicate_page (struct supplemental_page_table *dst,
 		if (dst_aux == NULL)
 			return false;
 
-		dst_aux->file = file_reopen (src_aux->file);
+		dst_aux->file = src_aux->file;
 		if (dst_aux->file == NULL) {
 			free (dst_aux);
 			return false;
@@ -448,7 +448,6 @@ duplicate_page (struct supplemental_page_table *dst,
 
 		succ = vm_alloc_page_with_initializer (page_get_type (src_page), src_page->va, src_page->writable, src_page->uninit.init, dst_aux);
 		if (!succ) {
-			file_close (dst_aux->file);
 			free (dst_aux);
 			return false;
 		}
@@ -456,8 +455,7 @@ duplicate_page (struct supplemental_page_table *dst,
 		struct page *dst_page = spt_find_page (dst, src_page->va);
 		succ = vm_claim_page (src_page->va);
 		if (!succ) {
-			file_close (dst_aux->file);
-			spt_destroy_page (&dst_page->hash_elem, NULL);
+			spt_remove_page (dst, dst_page);
 			return false;
 		}
 
