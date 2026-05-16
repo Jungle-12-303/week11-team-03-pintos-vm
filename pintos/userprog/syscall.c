@@ -206,18 +206,28 @@ syscall_handler (struct intr_frame *f) {
 #endif
 	// x86-64 호출 규약에서 함수 반환값은 RAX 레지스터에 두어야 합니다. 반환값이 있는 시스템 콜은 struct intr_frame의 rax 멤버를 수정해 이를 구현할 수 있습니다.
 
-	switch (f->R.rax) {
+	uint64_t command = f->R.rax;
+	uint64_t args[6] = {
+		f->R.rdi,
+		f->R.rsi,
+		f->R.rdx,
+		f->R.r10,
+		f->R.r8,
+		f->R.r9,
+	};
+
+	switch (command) {
 	/* Projects 2 and later. */
 	case SYS_HALT:    /* Halt the operating system. */
 		power_off (); // OS 종료
 		break;
 	case SYS_EXIT: /* Terminate this process. */
-		process_exit_with_status ((int) f->R.rdi);
+		process_exit_with_status ((int) args[0]);
 		break;
 	// 현재 실행중인 사용자 process를 복사해서 자식 process 생성
 	case SYS_FORK: /* Clone current process. */
 	{
-		const char *thread_name = (const char *) f->R.rdi; // fork(const char *thread_name)의 첫 번째 인자
+		const char *thread_name = (const char *) args[0]; // fork(const char *thread_name)의 첫 번째 인자
 
 		user_check_string (thread_name);
 		f->R.rax = process_fork (thread_name, f); // fork() syscall 실패시 부모에게 -1 반환, 성공시 child tid 반환
@@ -226,7 +236,7 @@ syscall_handler (struct intr_frame *f) {
 	// 이미 실행 중인 user process가 exec()를 요청한 상황
 	case SYS_EXEC: /* Switch current process. */
 	{
-		const char *cmd_line = (const char *) f->R.rdi; // exec(const char *file)의 첫 번째 인자
+		const char *cmd_line = (const char *) args[0]; // exec(const char *file)의 첫 번째 인자
 		char *cmd_copy;
 
 		user_check_string (cmd_line);      // 사용자 입력값 검증
@@ -242,23 +252,23 @@ syscall_handler (struct intr_frame *f) {
 	}
 	case SYS_WAIT: /* Wait for a child process to die. */
 	{
-		tid_t child_tid = (tid_t) f->R.rdi;  // 사용자 프로그램이 넘긴 pid 값
+		tid_t child_tid = (tid_t) args[0];   // 사용자 프로그램이 넘긴 pid 값
 		f->R.rax = process_wait (child_tid); // 자식 종료 상태를 syscall 반환값으로 저장
 		break;
 	}
 	case SYS_CREATE: /* Create a file. */
 	{
-		const char *file = (const char *) f->R.rdi;
+		const char *file = (const char *) args[0];
 
 		user_check_string (file);
 		lock_acquire (&filesys_lock);
-		f->R.rax = filesys_create (file, f->R.rsi);
+		f->R.rax = filesys_create (file, args[1]);
 		lock_release (&filesys_lock);
 		break;
 	}
 	case SYS_REMOVE: /* Delete a file. */
 	{
-		const char *file = (const char *) f->R.rdi;
+		const char *file = (const char *) args[0];
 
 		user_check_string (file);
 		lock_acquire (&filesys_lock);
@@ -267,7 +277,7 @@ syscall_handler (struct intr_frame *f) {
 		break;
 	}
 	case SYS_OPEN: {
-		const char *file_name = (const char *) f->R.rdi;
+		const char *file_name = (const char *) args[0];
 		struct file *file;
 
 		user_check_string (file_name);
@@ -279,7 +289,7 @@ syscall_handler (struct intr_frame *f) {
 	}
 	case SYS_FILESIZE: /* Obtain a file's size. */
 	{
-		int fd = (int) f->R.rdi;
+		int fd = (int) args[0];
 		struct file *file = process_get_file (fd);
 
 		if (file == NULL) {
@@ -293,9 +303,9 @@ syscall_handler (struct intr_frame *f) {
 	}
 	case SYS_READ: /* Read from a file. */
 	{
-		int fd = (int) f->R.rdi;
-		void *buffer = (void *) f->R.rsi;
-		unsigned size = (unsigned) f->R.rdx;
+		int fd = (int) args[0];
+		void *buffer = (void *) args[1];
+		unsigned size = (unsigned) args[2];
 		enum process_fd_type type;
 		struct file *file;
 
@@ -324,9 +334,9 @@ syscall_handler (struct intr_frame *f) {
 		break;
 	}
 	case SYS_WRITE: {
-		int fd = (int) f->R.rdi;
-		void *buffer = (void *) f->R.rsi;
-		unsigned size = (unsigned) f->R.rdx;
+		int fd = (int) args[0];
+		void *buffer = (void *) args[1];
+		unsigned size = (unsigned) args[2];
 		enum process_fd_type type;
 		struct file *file;
 
@@ -381,6 +391,30 @@ syscall_handler (struct intr_frame *f) {
 	case SYS_CLOSE: /* Close a file. */
 		process_close_file (f->R.rdi);
 		break;
+
+	case SYS_MMAP: {
+		void *addr = (void *) args[0];
+		size_t length = (size_t) args[1];
+		bool writable = (bool) args[2];
+		int fd = (int) args[3];
+		off_t offset = (off_t) args[4];
+
+		// Map a file into memory.
+		user_check_ptr (addr, writable);
+
+		struct file *file = process_get_file (fd);
+
+		lock_acquire (&filesys_lock);
+		file_read (file, addr, length);
+		lock_release (&filesys_lock);
+
+		break;
+	}
+	case SYS_MUNMAP:
+
+		/* Remove a memory mapping. */
+		break;
+
 	case SYS_DUP2:
 		f->R.rax = process_dup2 ((int) f->R.rdi, (int) f->R.rsi);
 		break;
