@@ -1370,14 +1370,6 @@ install_page (void *upage, void *kpage, bool writable) {
  * If you want to implement the function for only project 2, implement it on the
  * upper block. */
 
-/* aux 구조체  위치 */
-struct lazy_load_aux {
-	struct file *file;
-	off_t ofs;
-	size_t page_read_bytes;
-	size_t page_zero_bytes;
-};
-
 /* lazy load 시 실행 파일의 segment 내용을 실제 frame에 채우는 함수. 성공 여부 반환 */
 static bool
 lazy_load_segment (struct page *page, void *aux) {

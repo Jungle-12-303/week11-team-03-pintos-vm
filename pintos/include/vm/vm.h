@@ -37,6 +37,14 @@ struct thread;
 
 #define VM_TYPE(type) ((type) & 7)
 
+/* aux 구조체  위치 */
+struct lazy_load_aux {
+	struct file *file;
+	off_t ofs;
+	size_t page_read_bytes;
+	size_t page_zero_bytes;
+};
+
 /* The representation of "page".
  * This is kind of "parent class", which has four "child class"es, which are
  * uninit_page, file_page, anon_page, and page cache (project4).
