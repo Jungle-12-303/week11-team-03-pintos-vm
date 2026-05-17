@@ -40,10 +40,27 @@ static struct lock frame_lock;
 */
 
 /* frame table과 frame lock을 초기화한다. */
-static void
+void
 vm_frame_table_init (void) {
 	list_init (&frame_table);
 	lock_init (&frame_lock);
+}
+
+bool vm_frame_table_insert(struct frame *frame){
+	
+	lock_acquire(&frame_lock);
+	//list_push_back (&frame_table, &frame->elem);
+
+	//기존 프레임 페이지에 있었으면 프레임 테이블에서 없애기
+	if(frame->page->anon.in_swapdisk){
+		list_remove(frame->elem);
+	}
+	
+	//frame_table 맨 뒤에 frame넣기 (LRU)
+	list_push_back (&frame_table, frame->elem);
+	lock_release (&frame_lock);
+
+	return true;
 }
 
 // [헬퍼 함수] SPT hash table 안의 page 하나를 꺼내서 실제로 해제
@@ -286,9 +303,7 @@ vm_get_frame (void) {
 	ASSERT (frame->page == NULL);
 	ASSERT (frame->kva != NULL);
 
-	lock_acquire (&frame_lock);
-	list_push_back (&frame_table, &frame->elem);
-	lock_release (&frame_lock);
+	vm_frame_table_insert(frame);
 
 	return frame;
 }
