@@ -3,6 +3,9 @@
 #include <stdbool.h>
 #include "threads/palloc.h"
 #include <hash.h>
+#include <list.h>
+// #include "threads/thread.h"
+
 
 enum vm_type {
 	/* page not initialized */
@@ -73,7 +76,7 @@ struct page {
 struct frame {
 	void *kva;
 	struct page *page;
-	int used_cnt;
+	struct list_elem *elem;
 };
 
 /* The function table for page operations.
@@ -100,7 +103,10 @@ struct supplemental_page_table {
 	struct hash spt_hash;
 };
 
-#include "threads/thread.h"
+//프레임 테이블 함수
+void vm_frame_table_init (void);
+bool vm_frame_table_insert(struct frame *frame);
+
 void supplemental_page_table_init (struct supplemental_page_table *spt);
 bool supplemental_page_table_copy (struct supplemental_page_table *dst,
                                    struct supplemental_page_table *src);
