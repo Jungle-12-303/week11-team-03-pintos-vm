@@ -59,34 +59,49 @@ do_mmap (void *addr, size_t length, int writable,
          struct file *file, off_t offset) {
 	uint64_t start = (uint64_t) addr;
 	uint64_t end = start + length;
+	size_t page_count; // 요청한 mmap 길이를 덮는 page 수
+	off_t file_len;    // 원본 파일 길이
+	off_t current_offset;
+	size_t remaining_file_bytes;
+	void *upage;
+
 	// do_mmap 내부 최소 인자 검증
-	if (addr == NULL)
+	if (addr == NULL || file == NULL)
 		return NULL;
 
-	if (file == NULL)
-		return NULL;
 	if (end < start)
 		return NULL;
-	size_t page_count = DIV_ROUND_UP (length, PGSIZE); // 요청한 mmap 길이를 덮는 page 수
-	off_t current_offset = offset;
+
+	page_count = DIV_ROUND_UP (length, PGSIZE);
+	current_offset = offset;
+
+	// 실제로 매핑할 파일 바이트 수를 요청한 length 이하로 제한
 	lock_acquire (&filesys_lock);
-	off_t file_len = file_length (file); // file_duplicate()으로 mapping용 file 확보
+	file_len = file_length (file);
 	lock_release (&filesys_lock);
+
 	if (file_len <= 0 || offset >= file_len)
 		return NULL;
-	size_t remaining_file_bytes = file_len - offset;
+
+	remaining_file_bytes = file_len - offset;
 	if (remaining_file_bytes > length)
 		remaining_file_bytes = length;
-	void *upage = addr;
+
+	// 사용자 페이지마다 하나의 lazy VM_FILE 페이지를 등록
+	upage = addr;
 	for (size_t i = 0; i < page_count; i++) {
 		struct mmap_aux *aux;
 		struct file *opened_file;
+
 		aux = malloc (sizeof (struct mmap_aux));
 		if (aux == NULL)
 			goto fail;
+
+		// 각 page는 cleanup 전까지 독립적인 file reference를 가진다
 		lock_acquire (&filesys_lock);
 		opened_file = file_duplicate (file); // 이 mmap page가 소유할 file reference
 		lock_release (&filesys_lock);
+
 		if (opened_file == NULL) {
 			free (aux);
 			goto fail;
@@ -99,6 +114,7 @@ do_mmap (void *addr, size_t length, int writable,
 		aux->zero_bytes = PGSIZE - aux->read_bytes;
 		aux->page_count = page_count;
 		aux->map_base = addr;
+
 		// VM_FILE lazy page를 SPT에 등록
 		if (!vm_alloc_page_with_initializer (VM_FILE, upage, writable,
 		                                     lazy_load_file_page, aux)) {
@@ -108,21 +124,26 @@ do_mmap (void *addr, size_t length, int writable,
 			free (aux);
 			goto fail;
 		}
+
+		// 다음 page 계산을 위해 남은 바이트와 offset을 갱신
 		remaining_file_bytes -= aux->read_bytes;
 		current_offset += aux->read_bytes;
 		upage = (uint8_t *) upage + PGSIZE;
 	}
-	// 성공하면 addr 반환
+
 	return addr;
-	// 중간 실패 시 이미 SPT에 등록한 page들을 되돌린다.
+
 fail:
+	// 중간 실패 시 이미 SPT에 등록한 page들을 되돌린다.
 	for (void *va = addr; va < upage; va = (uint8_t *) va + PGSIZE) {
 		struct page *page = spt_find_page (&thread_current ()->spt, va);
 		if (page != NULL)
 			spt_remove_page (&thread_current ()->spt, page);
 	}
+
 	return NULL;
 }
+
 /* Do the munmap */
 void
 do_munmap (void *addr) {
