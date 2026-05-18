@@ -427,6 +427,11 @@ syscall_handler (struct intr_frame *f) {
 		f->R.rax = (uint64_t) do_mmap (addr, length, writable, file, offset);
 		break;
 	}
+	case SYS_MUNMAP: {
+		void *addr = (void *) f->R.rdi;
+		do_munmap (addr);
+		break;
+	}
 	default:
 		process_exit_with_status (-1); // 프로세스 비정상 종료
 		break;

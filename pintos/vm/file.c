@@ -48,9 +48,22 @@ file_backed_swap_out (struct page *page) {
 }
 
 /* Destroy the file backed page. PAGE will be freed by the caller. */
+
 static void
 file_backed_destroy (struct page *page) {
-	struct file_page *file_page UNUSED = &page->file;
+	// 현재 do_munmap 최소 cleanup
+	struct file_page *file_page = &page->file;
+	// todo: dirty write-back 함수 작성
+
+	vm_cleanup_page_frame (page); // 페이지와 연결된 프레임만 없애기
+
+	// 파일 닫기
+	if (file_page->file != NULL) {
+		lock_acquire (&filesys_lock);
+		file_close (page->file.file);
+		lock_release (&filesys_lock);
+		file_page->file = NULL;
+	}
 }
 
 // VM_FILE page가 최초 fault-in될 때 파일 내용을 읽고 page->file metadata를 완성하는 file-backed 전용 helper 함수
@@ -175,7 +188,71 @@ fail:
 	return NULL;
 }
 
+// [헬퍼 함수] do_munmap() 의 페이지 count를 얻기 위한 함수
+static size_t
+get_mmap_page_count (struct page *page, void *addr) {
+	// munmap 대상 주소가 현재 프로세스의 mmap file-backed page인지 확인
+	if (page == NULL || page_get_type (page) != VM_FILE)
+		return 0;
+
+	// 아직 page fault가 나지 않은 mmap page는 metadata가 uninit.aux에 남아 있음
+	if (page->operations->type == VM_UNINIT) {
+		struct mmap_aux *aux = page->uninit.aux;
+
+		if (aux == NULL || aux->map_base != addr)
+			return 0;
+
+		return aux->page_count;
+	}
+	// 이미 fault-in된 mmap page는 metadata가 page->file에 옮겨져 있음
+	if (page->file.map_base != addr)
+		return 0;
+
+	return page->file.page_count;
+}
+
 /* Do the munmap */
 void
 do_munmap (void *addr) {
+	struct supplemental_page_table *spt = &thread_current ()->spt;
+	struct page *first = spt_find_page (spt, addr);
+	size_t page_count = get_mmap_page_count (first, addr);
+
+	if (page_count == 0)
+		return;
+
+	// mmap 범위의 page를 순회하며 SPT에서 제거한다.
+	for (size_t i = 0; i < page_count; i++) {
+		// mmap 범위 안의 다음 page를 찾는다.
+		void *va = (uint8_t *) addr + i * PGSIZE;
+		struct page *page = spt_find_page (spt, va);
+
+		// page가 file-backed page 인지 확인
+		if (page == NULL || page_get_type (page) != VM_FILE)
+			continue;
+
+		// 아직 fault-in되지 않은 mmap page는 aux가 file reference를 소유하므로 직접 정리
+		if (page->operations->type == VM_UNINIT) {
+			struct mmap_aux *aux = page->uninit.aux;
+
+			// page가 같은 mmap 영역에 속한 page인지 확인
+			if (aux == NULL || aux->map_base != addr)
+				continue;
+
+			if (aux->file != NULL) {
+				lock_acquire (&filesys_lock);
+				file_close (aux->file);
+				lock_release (&filesys_lock);
+			}
+			free (aux);
+			page->uninit.aux = NULL;
+		} else {
+			/* 이미 fault-in된 mmap page는 metadata가 page->file에 있으므로
+			page->file.map_base로 같은 mmap 영역인지 확인한다. */
+			if (page->file.map_base != addr)
+				continue;
+		}
+		// SPT 제거가 page destroy까지 수행한다.
+		spt_remove_page (spt, page);
+	}
 }
