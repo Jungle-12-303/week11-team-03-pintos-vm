@@ -1,11 +1,16 @@
 /* file.c: Implementation of memory backed file object (mmaped object). */
 
 #include "vm/vm.h"
+#include "threads/vaddr.h"
+#include "threads/malloc.h"
+#include "userprog/syscall.h"
+#include <round.h>
+#include <string.h>
 
 static bool file_backed_swap_in (struct page *page, void *kva);
 static bool file_backed_swap_out (struct page *page);
 static void file_backed_destroy (struct page *page);
-
+static bool lazy_load_file_page (struct page *page, void *aux);
 /* DO NOT MODIFY this struct */
 static const struct page_operations file_ops = {
 	.swap_in = file_backed_swap_in,
@@ -26,18 +31,20 @@ file_backed_initializer (struct page *page, enum vm_type type, void *kva) {
 	page->operations = &file_ops;
 
 	struct file_page *file_page = &page->file;
+	return true;
 }
 
 /* Swap in the page by read contents from the file. */
 static bool
 file_backed_swap_in (struct page *page, void *kva) {
 	struct file_page *file_page UNUSED = &page->file;
+	return true;
 }
 
 /* Swap out the page by writeback contents to the file. */
 static bool
 file_backed_swap_out (struct page *page) {
-	struct file_page *file_page UNUSED = &page->file;
+	return true; // 테스트용 임시
 }
 
 /* Destory the file backed page. PAGE will be freed by the caller. */
@@ -49,9 +56,73 @@ file_backed_destroy (struct page *page) {
 /* Do the mmap */
 void *
 do_mmap (void *addr, size_t length, int writable,
-		struct file *file, off_t offset) {
-}
+         struct file *file, off_t offset) {
+	uint64_t start = (uint64_t) addr;
+	uint64_t end = start + length;
+	// do_mmap 내부 최소 인자 검증
+	if (addr == NULL)
+		return NULL;
 
+	if (file == NULL)
+		return NULL;
+	if (end < start)
+		return NULL;
+	size_t page_count = DIV_ROUND_UP (length, PGSIZE); // 요청한 mmap 길이를 덮는 page 수
+	off_t current_offset = offset;
+	lock_acquire (&filesys_lock);
+	off_t file_len = file_length (file); // file_duplicate()으로 mapping용 file 확보
+	lock_release (&filesys_lock);
+	if (file_len <= 0 || offset >= file_len)
+		return NULL;
+	size_t remaining_file_bytes = file_len - offset;
+	if (remaining_file_bytes > length)
+		remaining_file_bytes = length;
+	void *upage = addr;
+	for (size_t i = 0; i < page_count; i++) {
+		struct mmap_aux *aux;
+		struct file *opened_file;
+		aux = malloc (sizeof (struct mmap_aux));
+		if (aux == NULL)
+			goto fail;
+		lock_acquire (&filesys_lock);
+		opened_file = file_duplicate (file); // 이 mmap page가 소유할 file reference
+		lock_release (&filesys_lock);
+		if (opened_file == NULL) {
+			free (aux);
+			goto fail;
+		}
+
+		// 각 page의 메타데이터 계산
+		aux->file = opened_file;
+		aux->offset = current_offset;
+		aux->read_bytes = remaining_file_bytes < PGSIZE ? remaining_file_bytes : PGSIZE;
+		aux->zero_bytes = PGSIZE - aux->read_bytes;
+		aux->page_count = page_count;
+		aux->map_base = addr;
+		// VM_FILE lazy page를 SPT에 등록
+		if (!vm_alloc_page_with_initializer (VM_FILE, upage, writable,
+		                                     lazy_load_file_page, aux)) {
+			lock_acquire (&filesys_lock);
+			file_close (opened_file);
+			lock_release (&filesys_lock);
+			free (aux);
+			goto fail;
+		}
+		remaining_file_bytes -= aux->read_bytes;
+		current_offset += aux->read_bytes;
+		upage = (uint8_t *) upage + PGSIZE;
+	}
+	// 성공하면 addr 반환
+	return addr;
+	// 중간 실패 시 이미 SPT에 등록한 page들을 되돌린다.
+fail:
+	for (void *va = addr; va < upage; va = (uint8_t *) va + PGSIZE) {
+		struct page *page = spt_find_page (&thread_current ()->spt, va);
+		if (page != NULL)
+			spt_remove_page (&thread_current ()->spt, page);
+	}
+	return NULL;
+}
 /* Do the munmap */
 void
 do_munmap (void *addr) {
