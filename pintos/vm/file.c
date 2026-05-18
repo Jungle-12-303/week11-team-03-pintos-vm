@@ -6,11 +6,18 @@
 #include "userprog/syscall.h"
 #include <round.h>
 #include <string.h>
+#include <bitmap.h>
+#include "devices/disk.h"
+
+static struct bitmap *swap_bitmap;
+static struct lock swap_lock;
+static struct disk *swap_disk;
 
 static bool file_backed_swap_in (struct page *page, void *kva);
 static bool file_backed_swap_out (struct page *page);
 static void file_backed_destroy (struct page *page);
 static bool lazy_load_file_page (struct page *page, void *aux);
+
 /* DO NOT MODIFY this struct */
 static const struct page_operations file_ops = {
 	.swap_in = file_backed_swap_in,
@@ -46,7 +53,24 @@ file_backed_initializer (struct page *page, enum vm_type type UNUSED, void *kva 
 /* Swap in the page by read contents from the file. */
 static bool
 file_backed_swap_in (struct page *page, void *kva) {
-	struct file_page *file_page UNUSED = &page->file;
+	struct file_page *file_page = &page->file;
+	off_t read_amount;
+
+	ASSERT (page != NULL);
+	ASSERT (kva != NULL);
+	ASSERT (file_page->file != NULL);
+
+	// 파일 내용을 kva에 읽는 작업
+	lock_acquire (&filesys_lock);
+	read_amount = file_read_at (file_page->file, kva, file_page->read_bytes, file_page->offset);
+	lock_release (&filesys_lock);
+	if (read_amount != (off_t) file_page->read_bytes) {
+		return false;
+	}
+
+	// 남은 공간 제로필
+	memset ((uint8_t *) kva + file_page->read_bytes, 0, file_page->zero_bytes);
+
 	return true;
 }
 
