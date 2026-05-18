@@ -45,8 +45,8 @@ file_backed_swap_in (struct page *page, void *kva) {
 	struct file_page *file_page = &page->file;
 
 	off_t read_byte = file_read_at (file_page->file, kva, file_page->size, file_page->offset);
-	if (read_byte != page->file.size)
-		return false;
+	// if (read_byte != page->file.size)
+	// 	return false;
 	memset (kva + read_byte, 0, PGSIZE - read_byte);
 
 	return true;
@@ -56,7 +56,11 @@ file_backed_swap_in (struct page *page, void *kva) {
 static bool
 file_backed_swap_out (struct page *page) {
 	struct file_page *file_page = &page->file;
-	file_write ();
+	if (pml4_is_dirty (&thread_current ()->pml4, page) == true) {
+		off_t write_byte = file_write_at (file_page->file, page->frame->kva, file_page->size, file_page->offset);
+		pml4_set_dirty (&thread_current ()->pml4, page, false);
+	}
+	return true;
 }
 
 /* Destory the file backed page. PAGE will be freed by the caller. */
@@ -72,6 +76,8 @@ lazy_load_file (struct page *page, void *file_page_aux) {
 	page->file.file = aux->file;
 	page->file.offset = aux->offset;
 	page->file.size = aux->size;
+
+	file_backed_swap_in (page, page->frame->kva);
 
 	free (aux);
 	return true;
