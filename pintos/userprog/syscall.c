@@ -16,6 +16,7 @@
 #include "devices/input.h"
 #include "filesys/filesys.h"
 #include "filesys/file.h"
+#include "vm/file.h"
 
 void syscall_entry (void);
 void syscall_handler (struct intr_frame *);
@@ -384,6 +385,48 @@ syscall_handler (struct intr_frame *f) {
 	case SYS_DUP2:
 		f->R.rax = process_dup2 ((int) f->R.rdi, (int) f->R.rsi);
 		break;
+	case SYS_MMAP: {
+		void *addr = (void *) f->R.rdi;
+		size_t length = (size_t) f->R.rsi;
+		int writable = (int) f->R.rdx;
+		int fd = (int) f->R.r10;
+		off_t offset = (off_t) f->R.r8;
+		uint64_t start = (uint64_t) addr;
+		uint64_t end = start + length;
+		bool overlap = false;
+		struct file *file;
+
+		f->R.rax = (uint64_t) NULL;
+		if (addr == NULL)
+			break;
+		if (pg_ofs (addr) != 0)
+			break;
+		if (offset < 0 || offset % PGSIZE != 0)
+			break;
+		if (length == 0)
+			break;
+		if (process_get_fd_type (fd) != PROCESS_FD_FILE)
+			break;
+
+		file = process_get_file (fd);
+		if (file == NULL)
+			break;
+		if (end < start)
+			break;
+		if (!is_user_vaddr (addr) || !is_user_vaddr ((void *) (end - 1)))
+			break;
+		for (uint64_t page_addr = start; page_addr < end; page_addr += PGSIZE) {
+			if (spt_find_page (&thread_current ()->spt, (void *) page_addr) != NULL) {
+				overlap = true;
+				break;
+			}
+		}
+		if (overlap)
+			break;
+
+		f->R.rax = (uint64_t) do_mmap (addr, length, writable, file, offset);
+		break;
+	}
 	default:
 		process_exit_with_status (-1); // 프로세스 비정상 종료
 		break;
