@@ -1,8 +1,6 @@
 /* file.c: Implementation of memory backed file object (mmaped object). */
 
 #include "vm/vm.h"
-<<<<<<< Updated upstream
-=======
 #include "filesys/filesys.h"
 #include "string.h"
 
@@ -13,7 +11,6 @@ struct file_page_aux {
 	off_t offset;
 	off_t size;
 };
->>>>>>> Stashed changes
 
 static bool file_backed_swap_in (struct page *page, void *kva);
 static bool file_backed_swap_out (struct page *page);
@@ -45,9 +42,6 @@ file_backed_initializer (struct page *page, enum vm_type type, void *kva) {
 /* Swap in the page by read contents from the file. */
 static bool
 file_backed_swap_in (struct page *page, void *kva) {
-<<<<<<< Updated upstream
-	struct file_page *file_page UNUSED = &page->file;
-=======
 	struct file_page *file_page = &page->file;
 
 	off_t read_byte = file_read_at (file_page->file, kva, file_page->size, file_page->offset);
@@ -56,7 +50,6 @@ file_backed_swap_in (struct page *page, void *kva) {
 	memset (kva + read_byte, 0, PGSIZE - read_byte);
 
 	return true;
->>>>>>> Stashed changes
 }
 
 /* Swap out the page by writeback contents to the file. */
@@ -72,12 +65,6 @@ file_backed_destroy (struct page *page) {
 	struct file_page *file_page UNUSED = &page->file;
 }
 
-<<<<<<< Updated upstream
-/* Do the mmap */
-void *
-do_mmap (void *addr, size_t length, int writable,
-		struct file *file, off_t offset) {
-=======
 static bool
 lazy_load_file (struct page *page, void *file_page_aux) {
 	struct file_page_aux *aux = (struct file_page_aux *) file_page_aux;
@@ -160,7 +147,6 @@ error:
 	}
 
 	return NULL;
->>>>>>> Stashed changes
 }
 
 /* Do the munmap */

@@ -7,12 +7,9 @@ struct page;
 enum vm_type;
 
 struct file_page {
-<<<<<<< Updated upstream
-=======
 	struct file *file;
 	off_t offset;
 	off_t size;
->>>>>>> Stashed changes
 };
 
 void vm_file_init (void);

@@ -16,6 +16,9 @@
 #include "devices/input.h"
 #include "filesys/filesys.h"
 #include "filesys/file.h"
+#ifdef VM
+#include "vm/file.h"
+#endif
 
 void syscall_entry (void);
 void syscall_handler (struct intr_frame *);
@@ -205,8 +208,18 @@ syscall_handler (struct intr_frame *f) {
 	thread_current ()->saved_user_rsp = f->rsp;
 #endif
 	// x86-64 호출 규약에서 함수 반환값은 RAX 레지스터에 두어야 합니다. 반환값이 있는 시스템 콜은 struct intr_frame의 rax 멤버를 수정해 이를 구현할 수 있습니다.
+	int command = f->R.rax;
+	uint64_t args[] = {
+		f->R.rdi,
+		f->R.rsi,
+		f->R.rdx,
+		f->R.r10,
+		f->R.r8,
+		f->R.r9
 
-	switch (f->R.rax) {
+	};
+
+	switch (command) {
 	/* Projects 2 and later. */
 	case SYS_HALT:    /* Halt the operating system. */
 		power_off (); // OS 종료
@@ -384,6 +397,30 @@ syscall_handler (struct intr_frame *f) {
 	case SYS_DUP2:
 		f->R.rax = process_dup2 ((int) f->R.rdi, (int) f->R.rsi);
 		break;
+
+#ifdef VM
+	case SYS_MMAP: {
+		void *addr = (void *) args[0];
+		size_t length = (size_t) args[1];
+		int writable = (int) args[2];
+		int fd = (int) args[3];
+		off_t offset = (off_t) args[4];
+		struct file *file = process_get_file (fd);
+
+		ASSERT (file != NULL);
+
+		f->R.rax = (uint64_t) do_mmap (addr, length, writable, file, offset);
+
+		break;
+	}
+
+	case SYS_MUNMAP: {
+		// Todo
+		break;
+	}
+
+#endif
+
 	default:
 		process_exit_with_status (-1); // 프로세스 비정상 종료
 		break;
