@@ -25,12 +25,21 @@ vm_file_init (void) {
 }
 
 /* Initialize the file backed page */
+// file_backed_initializer는 page의 operations를 file-backed용으로 설정하고,
+// page->file metadata를 초기화한다.
 bool
-file_backed_initializer (struct page *page, enum vm_type type, void *kva) {
+file_backed_initializer (struct page *page, enum vm_type type UNUSED, void *kva UNUSED) {
 	/* Set up the handler */
 	page->operations = &file_ops;
 
 	struct file_page *file_page = &page->file;
+	file_page->file = NULL;
+	file_page->map_base = NULL;
+	file_page->offset = 0;
+	file_page->page_count = 0;
+	file_page->read_bytes = 0;
+	file_page->zero_bytes = 0;
+
 	return true;
 }
 
