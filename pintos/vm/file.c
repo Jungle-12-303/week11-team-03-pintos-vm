@@ -47,10 +47,41 @@ file_backed_swap_out (struct page *page) {
 	return true; // 테스트용 임시
 }
 
-/* Destory the file backed page. PAGE will be freed by the caller. */
+/* Destroy the file backed page. PAGE will be freed by the caller. */
 static void
 file_backed_destroy (struct page *page) {
 	struct file_page *file_page UNUSED = &page->file;
+}
+
+// VM_FILE page가 최초 fault-in될 때 파일 내용을 읽고 page->file metadata를 완성하는 file-backed 전용 helper 함수
+static bool
+lazy_load_file_page (struct page *page, void *aux) {
+	struct mmap_aux *m_aux = (struct mmap_aux *) aux;
+	void *kva = page->frame->kva;
+	off_t read_amount;
+
+	// aux의 메타데이터를 file-backed 페이지로 복사
+	page->file.file = m_aux->file;
+	page->file.offset = m_aux->offset;
+	page->file.read_bytes = m_aux->read_bytes;
+	page->file.zero_bytes = m_aux->zero_bytes;
+	page->file.map_base = m_aux->map_base;
+	page->file.page_count = m_aux->page_count;
+
+	// 파일 내용을 kva에 읽는 작업
+	lock_acquire (&filesys_lock);
+	read_amount = file_read_at (page->file.file, kva, page->file.read_bytes, page->file.offset);
+	lock_release (&filesys_lock);
+	if (read_amount != (off_t) page->file.read_bytes) {
+		free (m_aux);
+		return false;
+	}
+
+	// 남은 공간 제로필
+	memset ((uint8_t *) kva + page->file.read_bytes, 0, page->file.zero_bytes);
+
+	free (m_aux);
+	return true;
 }
 
 /* Do the mmap */
