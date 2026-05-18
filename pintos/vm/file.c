@@ -6,7 +6,7 @@
 #include "threads/vaddr.h"
 
 #define PGSIZE              (1 << 12)
-#define IS_ADDR_ALIGN(addr) (addr != pg_round_down (addr))
+#define IS_ADDR_ALIGN(addr) (addr == pg_round_down (addr))
 
 struct file_page_aux {
 	struct file *file;
@@ -100,7 +100,7 @@ do_mmap (void *addr, size_t length, int writable,
 	//  if (addr != pg_round_down (addr)) {
 	//  	return NULL;
 	//  }
-	if (IS_ADDR_ALIGN (addr))
+	if (!IS_ADDR_ALIGN (addr))
 		return NULL;
 
 	void *cur_addr = addr;
