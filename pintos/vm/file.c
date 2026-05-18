@@ -3,8 +3,10 @@
 #include "vm/vm.h"
 #include "filesys/filesys.h"
 #include "string.h"
+#include "threads/vaddr.h"
 
-#define PGSIZE (1 << 12)
+#define PGSIZE              (1 << 12)
+#define IS_ADDR_ALIGN(addr) (addr != pg_round_down (addr))
 
 struct file_page_aux {
 	struct file *file;
@@ -88,10 +90,20 @@ void *
 do_mmap (void *addr, size_t length, int writable,
          struct file *file, off_t offset) {
 	// 1. 인자 검증
+	ASSERT (is_user_vaddr (addr));
 
-	// 2. 매핑이 안되는 경우 검증
+	// 2. 인자 정리
+	// printf ("!![do_mmap]정렬 확인 %lld => %lld\n", addr, pg_round_down (addr));
+	// addr = pg_round_down (addr);
 
-	void *start_va = addr;
+	// 아래로 하면 통과됨
+	//  if (addr != pg_round_down (addr)) {
+	//  	return NULL;
+	//  }
+	if (IS_ADDR_ALIGN (addr))
+		return NULL;
+
+	void *cur_addr = addr;
 	int alloc_page_size = 0;
 	size_t rest_size = length;
 
@@ -118,7 +130,7 @@ do_mmap (void *addr, size_t length, int writable,
 
 			if (succ == false)
 				goto error;
-			addr += PGSIZE;
+			cur_addr += PGSIZE;
 			offset += PGSIZE;
 			rest_size -= PGSIZE;
 			++alloc_page_size;
@@ -131,20 +143,20 @@ do_mmap (void *addr, size_t length, int writable,
 			if (succ == false)
 				goto error;
 
-			addr += PGSIZE;
+			cur_addr += PGSIZE;
 			offset += PGSIZE;
 			rest_size = 0;
 		}
 	}
 
-	return start_va;
+	return addr;
 
 error:
 	if (aux != NULL)
 		free (aux);
 
 	// 중간 실패 시 이전 vm_alloc했던 페이지들 dealloc
-	void *va = start_va;
+	void *va = addr;
 	while (alloc_page_size != 0) {
 		struct page *page = spt_find_page (&thread_current ()->spt, va);
 		spt_remove_page (&thread_current ()->spt, page);
