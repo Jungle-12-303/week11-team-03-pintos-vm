@@ -10,10 +10,6 @@
 #include "devices/disk.h"
 #include "threads/mmu.h"
 
-static struct bitmap *swap_bitmap;
-static struct lock swap_lock;
-static struct disk *swap_disk;
-
 static bool file_backed_swap_in (struct page *page, void *kva);
 static bool file_backed_swap_out (struct page *page);
 static void file_backed_destroy (struct page *page);
@@ -114,9 +110,9 @@ file_backed_destroy (struct page *page) {
 	// 현재 do_munmap 최소 cleanup
 	struct file_page *file_page = &page->file;
 	// todo: dirty write-back 함수 작성
-
+	if (page->frame != NULL)
+		file_backed_swap_out (page);
 	vm_cleanup_page_frame (page); // 페이지와 연결된 프레임만 없애기
-
 	// 파일 닫기
 	if (file_page->file != NULL) {
 		lock_acquire (&filesys_lock);

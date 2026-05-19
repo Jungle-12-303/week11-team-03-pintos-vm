@@ -290,8 +290,10 @@ vm_evict_frame (void) {
 
 	// swap_out(victim->page) 호출. 실패시 NULL 반환
 	succ = swap_out (victim_page); // victim page를 swap_out()
-	if (!succ)
+	if (!succ) {
+		vm_register_frame (victim_frame);
 		return NULL;
+	}
 
 	// page table mapping 제거
 	pml4_clear_page (pml4, victim_page->va);
