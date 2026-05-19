@@ -11,6 +11,7 @@
 #include "vm/vm.h"
 #include "vm/uninit.h"
 #include "userprog/process.h"
+#include "vm/file.h"
 
 static bool uninit_initialize (struct page *page, void *kva);
 static void uninit_destroy (struct page *page);
@@ -64,13 +65,22 @@ uninit_initialize (struct page *page, void *kva) {
  * exit, which are never referenced during the execution.
  * PAGE will be freed by the caller. */
 static void
-uninit_destroy (struct page *page UNUSED) {
+uninit_destroy (struct page *page) {
 	struct uninit_page *uninit = &page->uninit;
-	/* TODO: Fill this function.
-	 * TODO: If you don't have anything to do, just return. */
-	// todo: 나중에 uninit->aux에 따로 malloc()한 구조체를 넣는다면 그 aux는 여기서 정리 가능
-	if (uninit->aux != NULL)
-		lazy_load_aux_destroy (uninit->aux);
 
-	return;
+	if (uninit->aux == NULL)
+		return;
+
+	switch (VM_TYPE (uninit->type)) {
+	case VM_ANON:
+		lazy_load_aux_destroy (uninit->aux);
+		break;
+	case VM_FILE:
+		mmap_aux_destroy (uninit->aux);
+		break;
+	default:
+		break;
+	}
+
+	uninit->aux = NULL;
 }

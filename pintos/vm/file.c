@@ -295,12 +295,7 @@ do_munmap (void *addr) {
 			if (aux == NULL || aux->map_base != addr)
 				continue;
 
-			if (aux->file != NULL) {
-				lock_acquire (&filesys_lock);
-				file_close (aux->file);
-				lock_release (&filesys_lock);
-			}
-			free (aux);
+			mmap_aux_destroy (aux);
 			page->uninit.aux = NULL;
 		} else {
 			/* 이미 fault-in된 mmap page는 metadata가 page->file에 있으므로
@@ -311,4 +306,22 @@ do_munmap (void *addr) {
 		// SPT 제거가 page destroy까지 수행한다.
 		spt_remove_page (spt, page);
 	}
+}
+
+// [헬퍼 함수] mmap aux 해제 helper 함수
+void
+mmap_aux_destroy (void *aux_) {
+	struct mmap_aux *aux = aux_;
+
+	if (aux == NULL)
+		return;
+
+	if (aux->file != NULL) {
+		lock_acquire (&filesys_lock);
+		file_close (aux->file);
+		lock_release (&filesys_lock);
+		aux->file = NULL;
+	}
+
+	free (aux);
 }

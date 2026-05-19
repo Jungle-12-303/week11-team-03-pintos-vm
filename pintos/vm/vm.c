@@ -570,9 +570,16 @@ supplemental_page_table_copy (struct supplemental_page_table *dst,
 
 		switch (VM_TYPE (page->operations->type)) {
 		case VM_UNINIT: {
+			/* mmap page는 fork 시 자식에게 상속하지 않는다. */
+			if (VM_TYPE (page->uninit.type) == VM_FILE) {
+				break;
+			}
+
 			void *aux = NULL;
 			if (page->uninit.aux != NULL) {
-				aux = lazy_load_aux_duplicate (page->uninit.aux);
+				if (VM_TYPE (page->uninit.type) == VM_ANON) {
+					aux = lazy_load_aux_duplicate (page->uninit.aux);
+				}
 				if (aux == NULL)
 					return false;
 			}
@@ -586,10 +593,12 @@ supplemental_page_table_copy (struct supplemental_page_table *dst,
 			struct page *child_page = spt_find_page (dst, page->va);
 			if (child_page == NULL)
 				return false;
+
 			if (!vm_claim_page (page->va)) {
 				spt_remove_page (dst, child_page);
 				return false;
 			}
+
 			break;
 		}
 		case VM_ANON: {
