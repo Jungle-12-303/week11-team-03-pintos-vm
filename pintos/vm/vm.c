@@ -353,12 +353,8 @@ vm_free_frame (struct frame *frame) {
 	free (frame);
 }
 
-/* palloc() and get frame. If there is no available page, evict the page
- * and return it. This always return valid address. That is, if the user pool
- * memory is full, this function evicts the frame to get the available memory
- * space.*/
-/* 빈 frame 확보하고, 새 frame이면 in_frame_table = false 로 초기화
-  eviction frame이면 이미 in_frame_table = true 인 상태로 반환하는 함수 */
+/* 새 frame을 할당하거나, user pool이 가득 찬 경우 기존 frame을 eviction해 재사용한다.
+ * frame 확보에 실패하면 NULL을 반환한다. */
 static struct frame *
 vm_get_frame (void) {
 	// (참고) 빈 등록 frame은 남기지 않는 정책 채택
@@ -375,7 +371,7 @@ vm_get_frame (void) {
 		free (frame);
 
 		// 기존에 메모리에 적재되어 사용중이던 프레임을 재사용
-		frame = vm_evict_frame (); // 반환값은 기존 frame table에 있던 frame
+		frame = vm_evict_frame (); // 기존 frame_table에서 꺼낸 frame을 재사용
 		if (frame == NULL)
 			return NULL;
 	}
@@ -433,7 +429,7 @@ vm_try_handle_fault (struct intr_frame *f, void *addr, bool user, bool write, bo
 	if (!not_present) // not_present 가 false이면 '페이지는 있는데 권한 위반'
 		return false;
 
-	/* SPT에 등록된 lazy page인지 확인 */
+	/* SPT에 등록된 page인지 확인 (swap-out된 anon page, file-backed page도 포함) */
 	page = spt_find_page (spt, addr);
 	if (page == NULL) {
 		/* stack growth 후보인지 검사하는 로직. stack growth 후보이면 확장 시도 기회를 주어야 함. */
@@ -518,7 +514,8 @@ vm_do_claim_page (struct page *page) {
 	if (frame == NULL)
 		return false;
 
-	bool already_registered = frame->in_frame_table; // vm_get_frame에서 false로 초기화
+	// 실패 rollback을 위한 등록 상태 기록 (현재 정책상 반환된 frame은 false)
+	bool already_registered = frame->in_frame_table;
 
 	/* Set links */
 	frame->page = page;
@@ -541,7 +538,7 @@ vm_do_claim_page (struct page *page) {
 		return false;
 	}
 
-	// palloc_get_page()로 새로 만든 frame인 경우 등록 필요
+	// claim에 성공한 frame이 frame_table 밖에 있으면 등록한다.
 	if (!already_registered) {
 		vm_register_frame (frame);
 	}
@@ -556,7 +553,8 @@ supplemental_page_table_init (struct supplemental_page_table *spt) {
 	           &hash_func, &hash_less, NULL);
 }
 
-/* Copy supplemental page table from src to dst */
+/* fork를 위해 src SPT를 dst로 복제한다.
+ * mmap/file-backed page는 자식에게 상속하지 않는다. */
 bool
 supplemental_page_table_copy (struct supplemental_page_table *dst,
                               struct supplemental_page_table *src) {

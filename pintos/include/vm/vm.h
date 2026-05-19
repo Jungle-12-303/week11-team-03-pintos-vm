@@ -66,8 +66,8 @@ struct frame {
 	void *kva;
 	struct page *page;
 	struct list_elem elem;
-	struct thread *owner; // 이 frame을 page table에 매핑한 프로세스
-	bool in_frame_table;  // 프레임 테이블에 존재 여부(새 frame인지 재사용 frame인지 구분하는 용도)
+	struct thread *owner; // 현재 이 frame을 page table에 매핑한 프로세스
+	bool in_frame_table;  // frame->elem이 현재 frame_table list에 들어 있는지 여부
 };
 
 /* The function table for page operations.
