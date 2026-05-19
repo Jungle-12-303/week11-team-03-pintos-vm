@@ -236,19 +236,34 @@ spt_remove_page (struct supplemental_page_table *spt, struct page *page) {
 static struct frame *
 vm_get_victim (void) {
 	struct frame *victim = NULL;
-	/* TODO: The policy for eviction is up to you. */
+	uint64_t *pml4;
+	void *va;
 	// 선정한 정책: clock/second-chance
+
 	lock_acquire (&frame_lock);
-	//  프레임 리스트  fifo
-	if (!list_empty (&frame_table)) {
-		victim = list_entry (list_pop_front (&frame_table), struct frame, elem);
-		victim->in_frame_table = false;
+
+	while (!list_empty (&frame_table)) {
+		struct frame *frame = list_entry (list_pop_front (&frame_table), struct frame, elem);
+		frame->in_frame_table = false;
+
+		// frame table에는 유효한 page/owner/pml4를 가진 frame만 있어야 한다.
+		ASSERT (frame->page != NULL);
+		ASSERT (frame->owner != NULL);
+		ASSERT (frame->owner->pml4 != NULL);
+		pml4 = frame->owner->pml4;
+		va = frame->page->va;
+
+		// second chance 주고 다음 frame으로
+		if (pml4_is_accessed (pml4, va)) {
+			pml4_set_accessed (pml4, va, false);
+			list_push_back (&frame_table, &frame->elem);
+			frame->in_frame_table = true;
+			continue;
+		}
+		victim = frame;
+		break;
 	}
-
 	lock_release (&frame_lock);
-
-	// second-chance 비트 탐색
-
 	return victim;
 }
 
