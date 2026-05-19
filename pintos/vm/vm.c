@@ -238,6 +238,16 @@ vm_get_victim (void) {
 	struct frame *victim = NULL;
 	/* TODO: The policy for eviction is up to you. */
 	// 선정한 정책: clock/second-chance
+	lock_acquire (&frame_lock);
+	//  프레임 리스트  fifo
+	if (!list_empty (&frame_table)) {
+		victim = list_entry (list_pop_front (&frame_table), struct frame, elem);
+		victim->in_frame_table = false;
+	}
+
+	lock_release (&frame_lock);
+
+	// second-chance 비트 탐색
 
 	return victim;
 }
