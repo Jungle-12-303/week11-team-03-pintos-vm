@@ -106,7 +106,7 @@ do_mmap (void *addr, size_t length, int writable,
 	size_t rest_size = length;
 
 	struct file *saved_file = file_reopen (file);
-	ASSERT (saved_file != NULL);
+	// ASSERT (saved_file != NULL);
 
 	struct file_page_aux *aux;
 	bool succ = false;
@@ -126,8 +126,11 @@ do_mmap (void *addr, size_t length, int writable,
 			succ = vm_alloc_page_with_initializer (VM_FILE, addr, writable,
 			                                       lazy_load_file, aux);
 
-			if (succ == false)
+			if (succ == false) {
+				// printf ("[!!] 풀페이지 매핑 시도 실패 \n");
 				goto error;
+			}
+
 			cur_addr += PGSIZE;
 			offset += PGSIZE;
 			rest_size -= PGSIZE;
@@ -138,8 +141,10 @@ do_mmap (void *addr, size_t length, int writable,
 			succ = vm_alloc_page_with_initializer (VM_FILE, addr, writable,
 			                                       lazy_load_file, aux);
 
-			if (succ == false)
+			if (succ == false) {
+				// printf ("[!!] 부분 페이지(마지막) 매핑 시도 실패 \n");
 				goto error;
+			}
 
 			cur_addr += PGSIZE;
 			offset += PGSIZE;
@@ -150,6 +155,7 @@ do_mmap (void *addr, size_t length, int writable,
 	return addr;
 
 error:
+	// printf ("[!!] 매핑 실패\n");
 	if (aux != NULL)
 		free (aux);
 

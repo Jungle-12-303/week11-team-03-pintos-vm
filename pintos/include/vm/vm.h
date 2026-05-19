@@ -101,6 +101,9 @@ struct supplemental_page_table {
 	struct hash spt_hash;
 };
 
+void vm_frame_table_init (void);
+bool vm_frame_table_insert (struct frame *frame);
+
 #include "threads/thread.h"
 void supplemental_page_table_init (struct supplemental_page_table *spt);
 bool supplemental_page_table_copy (struct supplemental_page_table *dst,

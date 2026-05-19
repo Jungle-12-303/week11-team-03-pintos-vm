@@ -13,10 +13,6 @@
 #define USER_STACK_MAX_SIZE (1 << 20)
 #define PGSIZE              (1 << PGBITS)
 
-/* 프레임 관련 전역 구조체 */
-static struct list frame_table;
-static struct lock frame_lock;
-
 // (참고) stack growth가 동작하면 fault 주소가 속한 4KB page 하나를 새 anonymous page로 만들고, 그 frame을 0으로 채워 초기화한다.
 
 /* stack growth가 필요한 경우:
@@ -39,11 +35,38 @@ static struct lock frame_lock;
     6) 그때 rsp가 8바이트 감소
 */
 
+/* 프레임 관련 전역 구조체 */
+static struct list frame_table;
+static struct list_elem *clock_hand;
+static struct lock frame_lock;
+
 /* frame table과 frame lock을 초기화한다. */
-static void
+void
 vm_frame_table_init (void) {
-	list_init (&frame_table);
 	lock_init (&frame_lock);
+	list_init (&frame_table);
+	clock_hand = list_front (&frame_table);
+}
+
+bool
+vm_frame_table_insert (struct frame *frame) {
+	// bool frame_exist = false;
+	// for (struct list_elem *e = list_begin (&thread_current ()->frame_table);
+	//      e != list_end (&thread_current ()->frame_table); e = list_next (e)) {
+	// 	struct frame *f = list_entry (e, struct frame, elem);
+	// 	if (frame == f) {
+	// 		frame_exist = true;
+	// 		break;
+	// 	}
+	// }
+
+	lock_acquire (&frame_lock);
+	// if (frame_exist)
+	// 	list_remove (&frame->elem);
+	list_push_back (&thread_current ()->frame_table, &frame->elem);
+	lock_release (&frame_lock);
+
+	return true;
 }
 
 // [헬퍼 함수] SPT hash table 안의 page 하나를 꺼내서 실제로 해제
@@ -155,6 +178,8 @@ vm_alloc_page_with_initializer (enum vm_type type, void *upage, bool writable,
 	ASSERT (VM_TYPE (type) != VM_UNINIT);
 	ASSERT (upage == pg_round_down (upage)); // 정렬 여부 검사
 
+	// printf ("-----------------------------------\n");
+
 	/* VM_UNINIT */
 	bool (*page_initializer) (struct page *, enum vm_type, void *) = NULL;
 	switch (VM_TYPE (type)) {
@@ -171,25 +196,32 @@ vm_alloc_page_with_initializer (enum vm_type type, void *upage, bool writable,
 	/* Check whether the upage is already occupied or not. */
 	struct supplemental_page_table *spt = &thread_current ()->spt;
 	if (spt_find_page (spt, upage) == NULL) {
+		// printf ("spt_find_page했는데 null\n");
+
 		/* Create the page,
 		fetch the initialier according to the VM type,*/
 		struct page *pp = malloc (sizeof *pp);
 		if (pp == NULL) {
+			// printf ("페이지 malloc 실패\n");
 			goto err;
 		}
 		/* and then create "uninit" page struct by calling uninit_new.
 		  You should modify the field after calling the uninit_new. */
+		// printf ("페이지 malloc성공 & uninit_new 함\n");
 		uninit_new (pp, upage, init, type, aux, page_initializer);
 		pp->writable = writable;
 
 		/* Insert the page into the spt. */
 		if (!spt_insert_page (spt, pp)) {
 			vm_dealloc_page (pp);
+			// printf ("spt_insert_page 실패\n");
 			goto err;
 		}
+		// printf ("spt_insert_page 성공\n");
 		return true;
 	}
 err:
+	// printf ("[vm_alloc_page_with_initializer] err\n");
 	return false;
 }
 
@@ -242,11 +274,17 @@ spt_remove_page (struct supplemental_page_table *spt, struct page *page) {
 }
 
 /* Get the struct frame, that will be evicted. */
+/* The policy for eviction is LRU. */
 static struct frame *
 vm_get_victim (void) {
-	struct frame *victim = NULL;
-	/* TODO: The policy for eviction is up to you. */
+	struct list frame_table = thread_current ()->frame_table;
+	struct list *clock_hand = thread_current ()->clock_hand;
 
+	if (list_size (&frame_table) == 0)
+		return NULL;
+
+	// frame_table을 clock_hand이 순회하며 최근 사용한 애면 넘어가고 안쓴애면 victim으로 픽하기
+	// while()
 	return victim;
 }
 
@@ -254,10 +292,23 @@ vm_get_victim (void) {
  * Return NULL on error.*/
 static struct frame *
 vm_evict_frame (void) {
-	struct frame *victim UNUSED = vm_get_victim ();
-	/* TODO: swap out the victim and return the evicted frame. */
+	struct frame *victim = vm_get_victim ();
+	if (victim == NULL)
+		return NULL;
 
-	return NULL;
+	/* swap out the victim and return the evicted frame. */
+	if (!swap_out (victim->page)) {
+		vm_frame_table_insert (victim); // 유실된 프레임 frame-table에 복구
+		return NULL;
+	}
+
+	// 물리 메모리에서 프레임 제거
+	pml4_clear_page (thread_current ()->pml4, victim->page->va);
+	// 연결 끊기
+	victim->page->frame = NULL;
+	victim->page = NULL;
+
+	return victim;
 }
 
 /* palloc() and get frame. If there is no available page, evict the page
@@ -285,9 +336,7 @@ vm_get_frame (void) {
 	ASSERT (frame->page == NULL);
 	ASSERT (frame->kva != NULL);
 
-	lock_acquire (&frame_lock);
-	list_push_back (&frame_table, &frame->elem);
-	lock_release (&frame_lock);
+	vm_frame_table_insert (frame);
 
 	return frame;
 }
