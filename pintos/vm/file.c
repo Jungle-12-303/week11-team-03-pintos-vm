@@ -14,6 +14,10 @@ static bool file_backed_swap_in (struct page *page, void *kva);
 static bool file_backed_swap_out (struct page *page);
 static void file_backed_destroy (struct page *page);
 static bool lazy_load_file_page (struct page *page, void *aux);
+static struct mmap_aux *mmap_aux_create (struct file *file, off_t offset, size_t read_bytes,
+                                         size_t zero_bytes, void *map_base, size_t page_count);
+static bool mmap_register_page (void *upage, int writable, struct mmap_aux *aux);
+static void mmap_rollback_pages (void *start, void *end);
 
 /* DO NOT MODIFY this struct */
 static const struct page_operations file_ops = {
@@ -122,7 +126,7 @@ file_backed_destroy (struct page *page) {
 	}
 }
 
-// VM_FILE page가 최초 fault-in될 때 파일 내용을 읽고 page->file metadata를 완성하는 file-backed 전용 helper 함수
+// [헬퍼 함수] VM_FILE page가 최초 fault-in될 때 파일 내용을 읽고 page->file metadata를 완성하는 file-backed 전용 helper 함수
 static bool
 lazy_load_file_page (struct page *page, void *aux) {
 	struct mmap_aux *m_aux = (struct mmap_aux *) aux;
@@ -151,6 +155,57 @@ lazy_load_file_page (struct page *page, void *aux) {
 
 	free (m_aux);
 	return true;
+}
+
+// [헬퍼 함수] mmap_aux 생성 함수
+static struct mmap_aux *
+mmap_aux_create (struct file *file, off_t offset, size_t read_bytes,
+                 size_t zero_bytes, void *map_base, size_t page_count) {
+	struct mmap_aux *aux = malloc (sizeof *aux);
+	if (aux == NULL)
+		return NULL;
+
+	// 각 page는 cleanup 전까지 독립적인 file reference를 가진다
+	lock_acquire (&filesys_lock);
+	aux->file = file_duplicate (file);
+	lock_release (&filesys_lock);
+
+	if (aux->file == NULL) {
+		free (aux);
+		return NULL;
+	}
+
+	aux->offset = offset;
+	aux->read_bytes = read_bytes;
+	aux->zero_bytes = zero_bytes;
+	aux->map_base = map_base;
+	aux->page_count = page_count;
+
+	return aux;
+}
+
+// [헬퍼 함수] mmap에 페이지를 등록 여부를 반환하는 함수
+static bool
+mmap_register_page (void *upage, int writable, struct mmap_aux *aux) {
+	if (vm_alloc_page_with_initializer (VM_FILE, upage, writable,
+	                                    lazy_load_file_page, aux))
+		return true;
+
+	mmap_aux_destroy (aux);
+	return false;
+}
+
+// [헬퍼 함수] 실패시 rollback 함수
+static void
+mmap_rollback_pages (void *first, void *limit) {
+	struct supplemental_page_table *spt = &thread_current ()->spt;
+
+	// 중간 실패 시 이미 SPT에 등록한 page들을 되돌린다.
+	for (void *va = first; va < limit; va = (uint8_t *) va + PGSIZE) {
+		struct page *page = spt_find_page (spt, va);
+		if (page != NULL)
+			spt_remove_page (spt, page);
+	}
 }
 
 /* Do the mmap */
@@ -190,57 +245,36 @@ do_mmap (void *addr, size_t length, int writable,
 	// 사용자 페이지마다 하나의 lazy VM_FILE 페이지를 등록
 	upage = addr;
 	for (size_t i = 0; i < page_count; i++) {
+		size_t page_read_bytes;
+		if (remaining_file_bytes < PGSIZE) {
+			page_read_bytes = remaining_file_bytes;
+		} else
+			page_read_bytes = PGSIZE;
+		size_t page_zero_bytes = PGSIZE - page_read_bytes;
 		struct mmap_aux *aux;
-		struct file *opened_file;
 
-		aux = malloc (sizeof (struct mmap_aux));
+		// aux 생성
+		aux = mmap_aux_create (file, current_offset, page_read_bytes,
+		                       page_zero_bytes, addr, page_count);
 		if (aux == NULL)
 			goto fail;
 
-		// 각 page는 cleanup 전까지 독립적인 file reference를 가진다
-		lock_acquire (&filesys_lock);
-		opened_file = file_duplicate (file); // 이 mmap page가 소유할 file reference
-		lock_release (&filesys_lock);
-
-		if (opened_file == NULL) {
-			free (aux);
-			goto fail;
-		}
-
-		// 각 page의 메타데이터 계산
-		aux->file = opened_file;
-		aux->offset = current_offset;
-		aux->read_bytes = remaining_file_bytes < PGSIZE ? remaining_file_bytes : PGSIZE;
-		aux->zero_bytes = PGSIZE - aux->read_bytes;
-		aux->page_count = page_count;
-		aux->map_base = addr;
-
 		// VM_FILE lazy page를 SPT에 등록
-		if (!vm_alloc_page_with_initializer (VM_FILE, upage, writable,
-		                                     lazy_load_file_page, aux)) {
-			lock_acquire (&filesys_lock);
-			file_close (opened_file);
-			lock_release (&filesys_lock);
-			free (aux);
+		if (!mmap_register_page (upage, writable, aux))
 			goto fail;
-		}
 
 		// 다음 page 계산을 위해 남은 바이트와 offset을 갱신
-		remaining_file_bytes -= aux->read_bytes;
-		current_offset += aux->read_bytes;
+		remaining_file_bytes -= page_read_bytes;
+		current_offset += page_read_bytes;
 		upage = (uint8_t *) upage + PGSIZE;
 	}
 
 	return addr;
 
 fail:
-	// 중간 실패 시 이미 SPT에 등록한 page들을 되돌린다.
-	for (void *va = addr; va < upage; va = (uint8_t *) va + PGSIZE) {
-		struct page *page = spt_find_page (&thread_current ()->spt, va);
-		if (page != NULL)
-			spt_remove_page (&thread_current ()->spt, page);
-	}
-
+	// 등록된 페이지만 롤백한다.
+	// 실패 시 이미 등록된 page 범위: addr <= va < upage < end(전체 요청 끝)
+	mmap_rollback_pages (addr, upage);
 	return NULL;
 }
 
