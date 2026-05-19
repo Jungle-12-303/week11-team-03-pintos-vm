@@ -67,6 +67,7 @@ struct frame {
 	struct page *page;
 	struct list_elem elem;
 	struct thread *owner; // 이 frame을 page table에 매핑한 프로세스
+	bool in_frame_table;  // 프레임 테이블에 존재 여부(새 frame인지 재사용 frame인지 구분하는 용도)
 };
 
 /* The function table for page operations.
