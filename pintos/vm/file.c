@@ -8,6 +8,7 @@
 #include <string.h>
 #include <bitmap.h>
 #include "devices/disk.h"
+#include "threads/mmu.h"
 
 static struct bitmap *swap_bitmap;
 static struct lock swap_lock;
@@ -77,7 +78,33 @@ file_backed_swap_in (struct page *page, void *kva) {
 /* Swap out the page by writeback contents to the file. */
 static bool
 file_backed_swap_out (struct page *page) {
-	return true; // 테스트용 임시
+	ASSERT (page != NULL);
+	ASSERT (page->frame != NULL);
+	ASSERT (page->frame->kva);
+	ASSERT (page->frame->owner != NULL);
+	ASSERT (page->frame->owner->pml4 != NULL);
+
+	struct file_page *file_page = &page->file;
+	uint64_t *pml4 = page->frame->owner->pml4;
+
+	ASSERT (file_page != NULL);
+	ASSERT (file_page->file != NULL);
+
+	// dirty 페이지를 디스크에 쓴다.
+	if (pml4_is_dirty (pml4, page->va)) {
+		lock_acquire (&filesys_lock);
+		off_t written = file_write_at (file_page->file, page->frame->kva,
+		                               file_page->read_bytes, file_page->offset);
+		lock_release (&filesys_lock);
+
+		if (written != (off_t) file_page->read_bytes)
+			return false;
+
+		// page가 backing file/swap에 반영됐으니, page table entry의 dirty bit를 끈다.
+		pml4_set_dirty (pml4, page->va, false);
+	}
+
+	return true;
 }
 
 /* Destroy the file backed page. PAGE will be freed by the caller. */
