@@ -66,6 +66,7 @@ struct frame {
 	void *kva;
 	struct page *page;
 	struct list_elem elem;
+	struct thread *owner; // 이 frame을 page table에 매핑한 프로세스
 };
 
 /* The function table for page operations.
