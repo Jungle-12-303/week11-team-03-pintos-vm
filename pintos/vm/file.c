@@ -5,8 +5,9 @@
 #include "string.h"
 #include "threads/vaddr.h"
 
-#define PGSIZE              (1 << 12)
-#define IS_ADDR_ALIGN(addr) (addr == pg_round_down (addr))
+#define PGSIZE                  (1 << 12)
+#define IS_ADDR_ALIGN(addr)     (addr == pg_round_down (addr))
+#define IS_OFFSET_ALIGN(offset) (offset == pg_round_down (offset))
 
 struct file_page_aux {
 	struct file *file;
@@ -30,6 +31,7 @@ static const struct page_operations file_ops = {
 /* The initializer of file vm */
 void
 vm_file_init (void) {
+	// printf ("!![vm_file_init] vm 초기화\n");
 }
 
 /* Initialize the file backed page */
@@ -37,18 +39,18 @@ bool
 file_backed_initializer (struct page *page, enum vm_type type, void *kva) {
 	/* Set up the handler */
 	page->operations = &file_ops;
-
 	struct file_page *file_page = &page->file;
+
+	return true;
 }
 
 /* Swap in the page by read contents from the file. */
 static bool
 file_backed_swap_in (struct page *page, void *kva) {
+	// printf ("!![file_backed_swap_in] 파일 페이지 스왑 인\n");
 	struct file_page *file_page = &page->file;
 
 	off_t read_byte = file_read_at (file_page->file, kva, file_page->size, file_page->offset);
-	// if (read_byte != page->file.size)
-	// 	return false;
 	memset (kva + read_byte, 0, PGSIZE - read_byte);
 
 	return true;
@@ -58,7 +60,10 @@ file_backed_swap_in (struct page *page, void *kva) {
 static bool
 file_backed_swap_out (struct page *page) {
 	struct file_page *file_page = &page->file;
+	// file_write_at (file_page->file, page->frame->kva, file_page->size, file_page->offset);
+
 	if (pml4_is_dirty (&thread_current ()->pml4, page) == true) {
+		printf ("!![file_backed_swap_out] 파일 내용 변경\n");
 		off_t write_byte = file_write_at (file_page->file, page->frame->kva, file_page->size, file_page->offset);
 		pml4_set_dirty (&thread_current ()->pml4, page, false);
 	}
@@ -68,7 +73,8 @@ file_backed_swap_out (struct page *page) {
 /* Destory the file backed page. PAGE will be freed by the caller. */
 static void
 file_backed_destroy (struct page *page) {
-	struct file_page *file_page UNUSED = &page->file;
+	file_backed_swap_out (page);
+	// 투두: 페이지 프리
 }
 
 static bool
@@ -90,19 +96,11 @@ void *
 do_mmap (void *addr, size_t length, int writable,
          struct file *file, off_t offset) {
 	// 1. 인자 검증
-	ASSERT (is_user_vaddr (addr));
-
-	// 2. 인자 정리
-	// printf ("!![do_mmap]정렬 확인 %lld => %lld\n", addr, pg_round_down (addr));
-	// addr = pg_round_down (addr);
-
-	// 아래로 하면 통과됨
-	//  if (addr != pg_round_down (addr)) {
-	//  	return NULL;
-	//  }
-	if (!IS_ADDR_ALIGN (addr))
+	if (is_kernel_vaddr (addr) || !IS_ADDR_ALIGN (addr) ||
+	    length == 0 || file == NULL || !IS_OFFSET_ALIGN (offset))
 		return NULL;
 
+	// 2. 메모리 매핑하기
 	void *cur_addr = addr;
 	int alloc_page_size = 0;
 	size_t rest_size = length;

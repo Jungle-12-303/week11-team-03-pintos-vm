@@ -405,10 +405,8 @@ syscall_handler (struct intr_frame *f) {
 		int writable = (int) args[2];
 		int fd = (int) args[3];
 		off_t offset = (off_t) args[4];
+
 		struct file *file = process_get_file (fd);
-
-		ASSERT (file != NULL);
-
 		f->R.rax = (uint64_t) do_mmap (addr, length, writable, file, offset);
 
 		break;
