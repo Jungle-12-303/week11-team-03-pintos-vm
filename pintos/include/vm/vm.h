@@ -68,6 +68,9 @@ struct page {
 		struct page_cache page_cache;
 #endif
 	};
+
+	void *mapping_start;  // 이 페이지 같이 매핑되는 첫 페이지의 위치
+	off_t mapping_length; // 이 페이지가 매핑될 때 매핑요구받은 크기
 };
 
 /* The representation of "frame" */
@@ -105,6 +108,7 @@ struct supplemental_page_table {
 
 void vm_frame_table_init (void);
 bool vm_frame_table_insert (struct frame *frame);
+bool vm_frame_table_delete (struct frame *frame);
 
 #include "threads/thread.h"
 void supplemental_page_table_init (struct supplemental_page_table *spt);

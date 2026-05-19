@@ -60,12 +60,13 @@ file_backed_swap_in (struct page *page, void *kva) {
 static bool
 file_backed_swap_out (struct page *page) {
 	struct file_page *file_page = &page->file;
+	struct thread *owner_t = page->frame->owner_thread;
 	// file_write_at (file_page->file, page->frame->kva, file_page->size, file_page->offset);
 
-	if (pml4_is_dirty (thread_current ()->pml4, page->va) == true) {
-		printf ("!![file_backed_swap_out] 파일 내용 변경\n");
+	if (pml4_is_dirty (owner_t->pml4, page->va) == true) {
+		// printf ("!![file_backed_swap_out] 파일 내용 변경\n");
 		off_t write_byte = file_write_at (file_page->file, page->frame->kva, file_page->size, file_page->offset);
-		pml4_set_dirty (thread_current ()->pml4, page->va, false);
+		pml4_set_dirty (owner_t->pml4, page->va, false);
 	}
 	return true;
 }
@@ -73,8 +74,8 @@ file_backed_swap_out (struct page *page) {
 /* Destory the file backed page. PAGE will be freed by the caller. */
 static void
 file_backed_destroy (struct page *page) {
+	struct file_page *file_page UNUSED = &page->file;
 	file_backed_swap_out (page);
-	// 투두: 페이지 프리
 }
 
 static bool
@@ -123,8 +124,12 @@ do_mmap (void *addr, size_t length, int writable,
 		if (rest_size >= PGSIZE) {
 			aux->size = PGSIZE;
 
-			succ = vm_alloc_page_with_initializer (VM_FILE, addr, writable,
+			succ = vm_alloc_page_with_initializer (VM_FILE, cur_addr, writable,
 			                                       lazy_load_file, aux);
+
+			struct page *page = spt_find_page (&thread_current ()->spt, cur_addr);
+			page->mapping_length = addr;
+			page->mapping_length = length;
 
 			if (succ == false) {
 				// printf ("[!!] 풀페이지 매핑 시도 실패 \n");
@@ -138,7 +143,7 @@ do_mmap (void *addr, size_t length, int writable,
 		} else {
 			aux->size = rest_size;
 
-			succ = vm_alloc_page_with_initializer (VM_FILE, addr, writable,
+			succ = vm_alloc_page_with_initializer (VM_FILE, cur_addr, writable,
 			                                       lazy_load_file, aux);
 
 			if (succ == false) {
@@ -174,6 +179,29 @@ error:
 /* Do the munmap */
 void
 do_munmap (void *addr) {
+	// 1. 인자 검증
+	if (is_kernel_vaddr (addr))
+		return;
 
-	
+	struct supplemental_page_table *spt = &thread_current ()->spt;
+	struct page *page = spt_find_page (&thread_current ()->spt, addr);
+	off_t length = page->mapping_length;
+	void *cur_addr = page->mapping_start;
+
+	size_t total_page = (length + PGSIZE - 1) / PGSIZE;
+
+	while (total_page > 0) {
+		page = spt_find_page (&thread_current ()->spt, cur_addr);
+
+		if (page->frame != NULL) {
+			vm_frame_table_delete (page->frame);
+			palloc_free_page (page->frame->kva);
+			page->frame->page = NULL;
+		}
+		pml4_clear_page (thread_current ()->pml4, cur_addr);
+		spt_remove_page (&thread_current ()->spt, page);
+
+		cur_addr += PGSIZE;
+		--total_page;
+	}
 }

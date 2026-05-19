@@ -413,7 +413,9 @@ syscall_handler (struct intr_frame *f) {
 	}
 
 	case SYS_MUNMAP: {
-		// Todo
+		void *addr = (void *) args[0];
+
+		do_munmap (addr);
 		break;
 	}
 

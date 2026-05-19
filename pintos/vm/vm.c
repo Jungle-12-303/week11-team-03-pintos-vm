@@ -69,6 +69,13 @@ vm_frame_table_insert (struct frame *frame) {
 	return true;
 }
 
+bool
+vm_frame_table_delete (struct frame *frame) {
+	lock_acquire (&frame_lock);
+	list_remove (&frame->elem);
+	lock_release (&frame_lock);
+}
+
 // [헬퍼 함수] SPT hash table 안의 page 하나를 꺼내서 실제로 해제
 static void
 spt_destroy_page (struct hash_elem *e, void *aux UNUSED) {
