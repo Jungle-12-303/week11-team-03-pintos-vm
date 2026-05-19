@@ -53,7 +53,7 @@ is_stack_growth_candidate (void *addr, void *rsp) {
 
 	uint8_t *fault_addr = addr;
 	uint8_t *stack_ptr = rsp;
-	uint8_t *stack_top = (uint8_t *) USER_STACK;   // 사용자 스택 상한
+	uint8_t *stack_top = (uint8_t *) USER_STACK;             // 사용자 스택 상한
 	uint8_t *stack_bottom = stack_top - USER_STACK_MAX_SIZE; // 사용자 스택 하한
 
 	// 주소가 사용자 스택 하한 이상, 상한 미만 범위 안에 있어야 함.
@@ -237,18 +237,47 @@ static struct frame *
 vm_get_victim (void) {
 	struct frame *victim = NULL;
 	/* TODO: The policy for eviction is up to you. */
+	// 선정한 정책: clock/second-chance
 
 	return victim;
 }
 
 /* Evict one page and return the corresponding frame.
  * Return NULL on error.*/
+// 메모리에서 하나의 페이지를 제거한다. 그에 따른 프레임을 반환한다.
+// 목적: 메모리 frame만 비우고 page metadata는 SPT에 남겨 두는 것
 static struct frame *
 vm_evict_frame (void) {
-	struct frame *victim UNUSED = vm_get_victim ();
-	/* TODO: swap out the victim and return the evicted frame. */
+	/* swap out the victim and return the evicted frame. */
+	bool succ = false;
+	struct frame *victim_frame = vm_get_victim ();
+	if (victim_frame == NULL)
+		return NULL;
 
-	return NULL;
+	struct page *victim_page = victim_frame->page;
+	if (victim_page == NULL)
+		return NULL;
+
+	if (victim_frame->owner == NULL || victim_frame->owner->pml4 == NULL)
+		return NULL;
+
+	uint64_t *pml4 = victim_frame->owner->pml4;
+
+	// swap_out(victim->page) 호출. 실패시 NULL 반환
+	succ = swap_out (victim_page); // victim page를 swap_out()
+	if (!succ)
+		return NULL;
+
+	// page table mapping 제거
+	pml4_clear_page (pml4, victim_page->va);
+
+	// page/frame 연결 해제
+	victim_frame->page = NULL;
+	victim_page->frame = NULL;
+	victim_frame->owner = NULL;
+
+	// evicted frame 반환
+	return victim_frame;
 }
 
 static void
@@ -259,15 +288,27 @@ vm_frame_table_init (void) {
 
 static void
 vm_register_frame (struct frame *frame) {
+	if (frame == NULL)
+		return;
+
 	lock_acquire (&frame_lock);
-	list_push_back (&frame_table, &frame->elem);
+	if (!frame->in_frame_table) {
+		list_push_back (&frame_table, &frame->elem);
+		frame->in_frame_table = true;
+	}
 	lock_release (&frame_lock);
 }
 
 static void
 vm_unregister_frame (struct frame *frame) {
+	if (frame == NULL)
+		return;
+
 	lock_acquire (&frame_lock);
-	list_remove (&frame->elem);
+	if (frame->in_frame_table) {
+		list_remove (&frame->elem);
+		frame->in_frame_table = false;
+	}
 	lock_release (&frame_lock);
 }
 
@@ -276,10 +317,14 @@ vm_free_frame (struct frame *frame) {
 	if (frame == NULL)
 		return;
 
+	ASSERT (!frame->in_frame_table);
+
 	if (frame->page != NULL && frame->page->frame == frame)
 		frame->page->frame = NULL;
+
 	if (frame->kva != NULL)
 		palloc_free_page (frame->kva);
+
 	free (frame);
 }
 
@@ -287,19 +332,25 @@ vm_free_frame (struct frame *frame) {
  * and return it. This always return valid address. That is, if the user pool
  * memory is full, this function evicts the frame to get the available memory
  * space.*/
+/* 빈 frame 확보하고, 새 frame이면 in_frame_table = false 로 초기화
+  eviction frame이면 이미 in_frame_table = true 인 상태로 반환하는 함수 */
 static struct frame *
 vm_get_frame (void) {
+	// (참고) 빈 등록 frame은 남기지 않는 정책 채택
 	struct frame *frame = malloc (sizeof *frame);
 	if (frame == NULL)
 		return NULL;
 
 	frame->page = NULL;
+	frame->owner = NULL;
+	frame->in_frame_table = false;
 	frame->kva = palloc_get_page (PAL_USER);
-
+	// eviction 재사용 경로
 	if (frame->kva == NULL) {
 		free (frame);
 
-		frame = vm_evict_frame ();
+		// 기존에 메모리에 적재되어 사용중이던 프레임을 재사용
+		frame = vm_evict_frame (); // 반환값은 기존 frame table에 있던 frame
 		if (frame == NULL)
 			return NULL;
 	}
@@ -391,7 +442,11 @@ vm_cleanup_page_frame (struct page *page) {
 		return;
 
 	struct frame *frame = page->frame;
-	pml4_clear_page (thread_current ()->pml4, page->va);
+	ASSERT (frame->owner != NULL);
+	ASSERT (frame->owner->pml4 != NULL);
+	ASSERT (frame->in_frame_table);
+
+	pml4_clear_page (frame->owner->pml4, page->va);
 	vm_unregister_frame (frame);
 	vm_free_frame (frame);
 }
@@ -410,6 +465,26 @@ vm_claim_page (void *va) {
 	return vm_do_claim_page (page);
 }
 
+// [헬퍼 함수] vm_do_claim_page 의 실패 경로에서 롤백하는 함수
+static void
+vm_rollback_claim_frame (struct frame *frame, struct page *page,
+                         bool already_registered) {
+	if (frame == NULL)
+		return;
+
+	frame->page = NULL;
+	frame->owner = NULL;
+
+	if (page != NULL && page->frame == frame)
+		page->frame = NULL;
+
+	if (already_registered) {
+		vm_unregister_frame (frame);
+	}
+
+	vm_free_frame (frame);
+}
+
 /* Claim the PAGE and set up the mmu. */
 // page와 frame을 연결하는 함수
 static bool
@@ -418,26 +493,34 @@ vm_do_claim_page (struct page *page) {
 	if (frame == NULL)
 		return false;
 
+	bool already_registered = frame->in_frame_table; // vm_get_frame에서 false로 초기화
+
 	/* Set links */
 	frame->page = page;
+	frame->owner = thread_current ();
 	page->frame = frame;
 
 	/* Insert page table entry to map page's VA to frame's PA. */
 	bool succ = pml4_set_page (thread_current ()->pml4,
 	                           page->va, frame->kva, page->writable);
 	if (!succ) {
-		vm_free_frame (frame);
+		vm_rollback_claim_frame (frame, page, already_registered);
 		return false;
 	}
 
+	// swap in
 	succ = swap_in (page, frame->kva);
 	if (!succ) {
 		pml4_clear_page (thread_current ()->pml4, page->va);
-		vm_free_frame (frame);
+		vm_rollback_claim_frame (frame, page, already_registered);
 		return false;
 	}
 
-	vm_register_frame (frame);
+	// palloc_get_page()로 새로 만든 frame인 경우 등록 필요
+	if (!already_registered) {
+		vm_register_frame (frame);
+	}
+
 	return true;
 }
 
