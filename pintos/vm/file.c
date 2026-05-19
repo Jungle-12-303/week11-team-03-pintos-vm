@@ -62,10 +62,10 @@ file_backed_swap_out (struct page *page) {
 	struct file_page *file_page = &page->file;
 	// file_write_at (file_page->file, page->frame->kva, file_page->size, file_page->offset);
 
-	if (pml4_is_dirty (&thread_current ()->pml4, page) == true) {
+	if (pml4_is_dirty (thread_current ()->pml4, page->va) == true) {
 		printf ("!![file_backed_swap_out] 파일 내용 변경\n");
 		off_t write_byte = file_write_at (file_page->file, page->frame->kva, file_page->size, file_page->offset);
-		pml4_set_dirty (&thread_current ()->pml4, page, false);
+		pml4_set_dirty (thread_current ()->pml4, page->va, false);
 	}
 	return true;
 }
@@ -174,4 +174,6 @@ error:
 /* Do the munmap */
 void
 do_munmap (void *addr) {
+
+	
 }

@@ -75,6 +75,8 @@ struct frame {
 	void *kva;
 	struct page *page;
 	struct list_elem elem;
+
+	struct thread *owner_thread;
 };
 
 /* The function table for page operations.

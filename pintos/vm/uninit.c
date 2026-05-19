@@ -52,7 +52,6 @@ uninit_initialize (struct page *page, void *kva) {
 	void *aux = uninit->aux;
 
 	/* TODO: You may need to fix this function. */
-	// init == lazy_load_segment(page, aux) 구현해야 함
 
 	return uninit->page_initializer (page, uninit->type, kva) &&
 	       (init ? init (page, aux) : true);

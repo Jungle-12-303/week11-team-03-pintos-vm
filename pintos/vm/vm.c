@@ -45,7 +45,7 @@ void
 vm_frame_table_init (void) {
 	lock_init (&frame_lock);
 	list_init (&frame_table);
-	clock_hand = list_front (&frame_table);
+	// clock_hand = list_front (&frame_table);
 }
 
 bool
@@ -63,7 +63,7 @@ vm_frame_table_insert (struct frame *frame) {
 	lock_acquire (&frame_lock);
 	// if (frame_exist)
 	// 	list_remove (&frame->elem);
-	list_push_back (&thread_current ()->frame_table, &frame->elem);
+	list_push_back (&frame_table, &frame->elem);
 	lock_release (&frame_lock);
 
 	return true;
@@ -200,20 +200,20 @@ vm_alloc_page_with_initializer (enum vm_type type, void *upage, bool writable,
 
 		/* Create the page,
 		fetch the initialier according to the VM type,*/
-		struct page *pp = malloc (sizeof *pp);
-		if (pp == NULL) {
+		struct page *page = malloc (sizeof *page);
+		if (page == NULL) {
 			// printf ("페이지 malloc 실패\n");
 			goto err;
 		}
 		/* and then create "uninit" page struct by calling uninit_new.
 		  You should modify the field after calling the uninit_new. */
 		// printf ("페이지 malloc성공 & uninit_new 함\n");
-		uninit_new (pp, upage, init, type, aux, page_initializer);
-		pp->writable = writable;
+		uninit_new (page, upage, init, type, aux, page_initializer);
+		page->writable = writable;
 
 		/* Insert the page into the spt. */
-		if (!spt_insert_page (spt, pp)) {
-			vm_dealloc_page (pp);
+		if (!spt_insert_page (spt, page)) {
+			vm_dealloc_page (page);
 			// printf ("spt_insert_page 실패\n");
 			goto err;
 		}
@@ -232,13 +232,13 @@ spt_find_page (struct supplemental_page_table *spt, void *va) {
 		.va = pg_round_down (va),
 	};
 
-	struct hash_elem *h_e = hash_find (&spt->spt_hash, &temp_page.hash_elem);
+	struct hash_elem *e = hash_find (&spt->spt_hash, &temp_page.hash_elem);
 
-	if (h_e == NULL)
+	if (e == NULL)
 		return NULL;
 
 	// 찾은 hash_elem을 가공해서 찾으려던 page를 반환
-	struct page *page = hash_entry (h_e, struct page, hash_elem);
+	struct page *page = hash_entry (e, struct page, hash_elem);
 
 	return page;
 }
@@ -251,9 +251,9 @@ spt_insert_page (struct supplemental_page_table *spt,
 	ASSERT (page != NULL);
 	ASSERT (page->va == pg_round_down (page->va)); // 정렬 여부 검사
 
-	struct hash_elem *h_e = &page->hash_elem;
+	struct hash_elem *e = &page->hash_elem;
 
-	return hash_insert (&spt->spt_hash, h_e) == NULL;
+	return hash_insert (&spt->spt_hash, e) == NULL;
 }
 
 void
@@ -262,9 +262,9 @@ spt_remove_page (struct supplemental_page_table *spt, struct page *page) {
 	ASSERT (page != NULL);
 
 	struct hash *h = &spt->spt_hash;
-	struct hash_elem *h_e = &page->hash_elem;
+	struct hash_elem *e = &page->hash_elem;
 
-	if (hash_delete (h, h_e) == NULL) {
+	if (hash_delete (h, e) == NULL) {
 		printf ("!! [spt_remove_page] 삭제할 page를 찾을 수 없다 \n");
 		return;
 	}
@@ -274,17 +274,22 @@ spt_remove_page (struct supplemental_page_table *spt, struct page *page) {
 }
 
 /* Get the struct frame, that will be evicted. */
-/* The policy for eviction is LRU. */
+/* The policy for eviction is temporarly fifo.
+If available, we could change the policy to LRU. */
 static struct frame *
 vm_get_victim (void) {
-	struct list frame_table = thread_current ()->frame_table;
-	struct list *clock_hand = thread_current ()->clock_hand;
+	// struct list frame_table = frame_table;
+	// struct list *clock_hand = clock_hand;
+	lock_acquire (&frame_lock);
 
-	if (list_size (&frame_table) == 0)
+	if (list_size (&frame_table) == 0) {
+		lock_release (&frame_lock);
 		return NULL;
+	}
 
-	// frame_table을 clock_hand이 순회하며 최근 사용한 애면 넘어가고 안쓴애면 victim으로 픽하기
-	// while()
+	struct list_elem *e = list_pop_front (&frame_table);
+	lock_release (&frame_lock);
+	struct frame *victim = list_entry (e, struct frame, elem);
 	return victim;
 }
 
@@ -303,7 +308,7 @@ vm_evict_frame (void) {
 	}
 
 	// 물리 메모리에서 프레임 제거
-	pml4_clear_page (thread_current ()->pml4, victim->page->va);
+	pml4_clear_page (victim->owner_thread->pml4, victim->page->va);
 	// 연결 끊기
 	victim->page->frame = NULL;
 	victim->page = NULL;
@@ -323,6 +328,7 @@ vm_get_frame (void) {
 
 	frame->page = NULL;
 	frame->kva = palloc_get_page (PAL_USER);
+	frame->owner_thread = thread_current ();
 
 	if (frame->kva == NULL) {
 		free (frame);
@@ -330,6 +336,7 @@ vm_get_frame (void) {
 		frame = vm_evict_frame ();
 		if (frame == NULL)
 			return NULL;
+		frame->owner_thread = thread_current ();
 	}
 
 	ASSERT (frame != NULL);
