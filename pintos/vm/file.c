@@ -113,10 +113,11 @@ static void
 file_backed_destroy (struct page *page) {
 	// 현재 do_munmap 최소 cleanup
 	struct file_page *file_page = &page->file;
-	// todo: dirty write-back 함수 작성
 	if (page->frame != NULL)
-		file_backed_swap_out (page);
+		file_backed_swap_out (page); // dirty write-back 처리 포함
+
 	vm_cleanup_page_frame (page); // 페이지와 연결된 프레임만 없애기
+
 	// 파일 닫기
 	if (file_page->file != NULL) {
 		lock_acquire (&filesys_lock);

@@ -111,7 +111,7 @@ vm_init (void) {
 	// register_inspect_intr () 실행시 interrupt를 꺼 둔 상태로 진입함
 	register_inspect_intr ();
 	/* DO NOT MODIFY UPPER LINES. */
-	/* TODO: Your code goes here. */
+	/* Your code goes here. */
 	vm_frame_table_init ();
 }
 
@@ -222,11 +222,9 @@ spt_remove_page (struct supplemental_page_table *spt, struct page *page) {
 
 	struct hash *h = &spt->spt_hash;
 	struct hash_elem *h_e = &page->hash_elem;
+	struct hash_elem *deleted = hash_delete (h, h_e);
 
-	if (hash_delete (h, h_e) == NULL) {
-		printf ("!! [spt_remove_page] 삭제할 page를 찾을 수 없다 \n");
-		return;
-	}
+	ASSERT (deleted != NULL);
 
 	vm_dealloc_page (page);
 	return;
@@ -414,6 +412,8 @@ vm_stack_growth (void *addr) {
 /* Handle the fault on write_protected page */
 static bool
 vm_handle_wp (struct page *page UNUSED) {
+	/* COW 미구현 상태이고 write-protected fault는 미복구 */
+	return false;
 }
 
 /* Return true on success */
@@ -448,8 +448,6 @@ vm_try_handle_fault (struct intr_frame *f, void *addr, bool user, bool write, bo
 	/* read-only page에 write한 경우는 복구하면 안 된다. */
 	if (write && !page->writable)
 		return false;
-
-	// todo: 차후 f 와 user 사용시 검증 로직에 추가
 
 	return vm_do_claim_page (page);
 }

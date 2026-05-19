@@ -863,10 +863,6 @@ process_exec (void *f_name) {
 
 int
 process_wait (tid_t child_tid) {
-	/* XXX: Hint) The pintos exit if process_wait (initd), we recommend you
-	 * XXX:       to add infinite loop here before
-	 * XXX:       implementing the process_wait. */
-
 	struct child_status *cs;
 	int status;
 
@@ -1424,7 +1420,9 @@ lazy_load_segment (struct page *page, void *aux) {
 	/*  Load the segment from the file */
 	struct lazy_load_aux *lla = aux;
 
-	/*TODO: deadlock에 대한 대비 필요 - syscall 수정 */
+	/* syscall 경로는 filesys_lock 획득 전에 user buffer를 검증하므로
+	    현재 lazy load 경로에서 deadlock 문제는 발생하지 않는다. */
+
 	/* This called when the first page fault occurs on address VA. */
 	uint8_t *kva = page->frame->kva;
 	lock_acquire (&filesys_lock);
@@ -1469,7 +1467,7 @@ load_segment (struct file *file, off_t ofs, uint8_t *upage,
 		size_t page_read_bytes = read_bytes < PGSIZE ? read_bytes : PGSIZE;
 		size_t page_zero_bytes = PGSIZE - page_read_bytes;
 
-		/* TODO: Set up aux to pass information to the lazy_load_segment. */
+		/* Set up aux to pass information to the lazy_load_segment. */
 		struct lazy_load_aux *aux = malloc (sizeof *aux);
 		if (aux == NULL)
 			return false;
