@@ -55,10 +55,7 @@ struct fd_handle {
 struct fd_entry {
 	int fd;
 	struct fd_handle *handle;
-	struct list_elem elem;
 };
-
-#define PROCESS_MAX_FD 512
 
 static bool process_list_initialized (struct list *list);
 static struct fd_entry *process_find_fd_entry (struct thread *t, int fd);
@@ -87,11 +84,13 @@ void
 process_user_init (struct thread *t) {
 	ASSERT (t != NULL);
 
-	if (!process_list_initialized (&t->fd_table)) {
-		list_init (&t->fd_table);
-		t->next_fd = 0;
-		process_install_standard_fd (t, 0, PROCESS_FD_STDIN);
-		process_install_standard_fd (t, 1, PROCESS_FD_STDOUT);
+	if (t->fd_table == NULL) {
+		t->fd_table = calloc (PROCESS_MAX_FD, sizeof *t->fd_table);
+		if (t->fd_table != NULL) {
+			t->next_fd = 0;
+			process_install_standard_fd (t, 0, PROCESS_FD_STDIN);
+			process_install_standard_fd (t, 1, PROCESS_FD_STDOUT);
+		}
 	}
 	if (!process_list_initialized (&t->children))
 		list_init (&t->children);
@@ -182,7 +181,8 @@ process_insert_fd_entry (struct thread *t, int fd, struct fd_handle *handle) {
 	ASSERT (t != NULL);
 	ASSERT (handle != NULL);
 
-	if (fd < 0 || fd >= PROCESS_MAX_FD || process_find_fd_entry (t, fd) != NULL)
+	if (t->fd_table == NULL || fd < 0 || fd >= PROCESS_MAX_FD ||
+	    t->fd_table[fd] != NULL)
 		return false;
 
 	entry = malloc (sizeof *entry);
@@ -192,7 +192,7 @@ process_insert_fd_entry (struct thread *t, int fd, struct fd_handle *handle) {
 	entry->fd = fd;
 	entry->handle = handle;
 	fd_handle_acquire (handle);
-	list_push_back (&t->fd_table, &entry->elem);
+	t->fd_table[fd] = entry;
 
 	if (fd >= t->next_fd && fd < INT_MAX)
 		t->next_fd = fd + 1;
@@ -220,6 +220,9 @@ process_allocate_fd (struct thread *t) {
 
 	ASSERT (t != NULL);
 
+	if (t->fd_table == NULL)
+		return -1;
+
 	start = t->next_fd;
 	if (start < 0)
 		start = 0;
@@ -228,11 +231,11 @@ process_allocate_fd (struct thread *t) {
 		start = 0;
 
 	for (fd = start; fd < PROCESS_MAX_FD; fd++) {
-		if (process_find_fd_entry (t, fd) == NULL)
+		if (t->fd_table[fd] == NULL)
 			return fd;
 	}
 	for (fd = 0; fd < start; fd++) {
-		if (process_find_fd_entry (t, fd) == NULL)
+		if (t->fd_table[fd] == NULL)
 			return fd;
 	}
 	return -1;
@@ -267,18 +270,9 @@ process_add_file (struct file *file) {
 
 static struct fd_entry *
 process_find_fd_entry (struct thread *t, int fd) {
-	struct list_elem *e;
-
-	if (t == NULL || !process_list_initialized (&t->fd_table))
+	if (t == NULL || t->fd_table == NULL || fd < 0 || fd >= PROCESS_MAX_FD)
 		return NULL;
-
-	for (e = list_begin (&t->fd_table); e != list_end (&t->fd_table);
-	     e = list_next (e)) {
-		struct fd_entry *entry = list_entry (e, struct fd_entry, elem);
-		if (entry->fd == fd)
-			return entry;
-	}
-	return NULL;
+	return t->fd_table[fd];
 }
 
 struct file *
@@ -304,7 +298,7 @@ process_close_file (int fd) {
 	if (entry == NULL)
 		return false;
 
-	list_remove (&entry->elem);
+	cur->fd_table[fd] = NULL;
 	fd_handle_release (entry->handle);
 	free (entry);
 	if (fd < cur->next_fd)
@@ -314,21 +308,31 @@ process_close_file (int fd) {
 
 void
 process_close_all_files (void) {
-	process_close_files (thread_current ());
+	struct thread *cur = thread_current ();
+
+	process_close_files (cur);
+	free (cur->fd_table);
+	cur->fd_table = NULL;
 }
 
 static void
 process_close_files (struct thread *t) {
-	if (t == NULL || !process_list_initialized (&t->fd_table))
+	int fd;
+
+	if (t == NULL || t->fd_table == NULL)
 		return;
 
 	/* 프로세스 종료 시 명시적으로 close하지 않은 fd들을 모두 정리한다. */
-	while (!list_empty (&t->fd_table)) {
-		struct list_elem *e = list_pop_front (&t->fd_table);
-		struct fd_entry *entry = list_entry (e, struct fd_entry, elem);
+	for (fd = 0; fd < PROCESS_MAX_FD; fd++) {
+		struct fd_entry *entry = t->fd_table[fd];
+		if (entry == NULL)
+			continue;
+
+		t->fd_table[fd] = NULL;
 		fd_handle_release (entry->handle);
 		free (entry);
 	}
+	t->next_fd = 2;
 }
 
 int
@@ -362,8 +366,8 @@ process_duplicate_fds (struct thread *dst, struct thread *src) {
 	};
 
 	struct list maps;
-	struct list_elem *e;
 	struct list_elem *m;
+	int fd;
 
 	ASSERT (dst != NULL);
 	ASSERT (src != NULL);
@@ -372,14 +376,16 @@ process_duplicate_fds (struct thread *dst, struct thread *src) {
 	process_close_files (dst);
 	list_init (&maps);
 
-	if (!process_list_initialized (&src->fd_table))
+	if (src->fd_table == NULL)
 		return true;
 
 	dst->next_fd = src->next_fd;
-	for (e = list_begin (&src->fd_table); e != list_end (&src->fd_table);
-	     e = list_next (e)) {
-		struct fd_entry *src_entry = list_entry (e, struct fd_entry, elem);
+	for (fd = 0; fd < PROCESS_MAX_FD; fd++) {
+		struct fd_entry *src_entry = src->fd_table[fd];
 		struct fd_handle_map *map = NULL;
+
+		if (src_entry == NULL)
+			continue;
 
 		for (m = list_begin (&maps); m != list_end (&maps); m = list_next (m)) {
 			struct fd_handle_map *candidate =
@@ -824,6 +830,10 @@ process_exec (void *f_name) {
 	   성공하면 do_iret()로 user mode에 진입하므로 이 함수는 호출자에게 돌아오지 않는다. */
 	process_cleanup ();
 
+#ifdef VM
+	supplemental_page_table_init (&cur->spt);
+#endif
+
 	/* And then load the binary */
 	success = load (file_name, &_if);
 
@@ -853,10 +863,6 @@ process_exec (void *f_name) {
 
 int
 process_wait (tid_t child_tid) {
-	/* XXX: Hint) The pintos exit if process_wait (initd), we recommend you
-	 * XXX:       to add infinite loop here before
-	 * XXX:       implementing the process_wait. */
-
 	struct child_status *cs;
 	int status;
 
@@ -1360,11 +1366,77 @@ install_page (void *upage, void *kpage, bool writable) {
  * If you want to implement the function for only project 2, implement it on the
  * upper block. */
 
+/* aux 구조체  위치 */
+struct lazy_load_aux {
+	struct file *file;
+	off_t ofs;
+	size_t page_read_bytes;
+	size_t page_zero_bytes;
+	bool owns_file;
+};
+
+void *
+lazy_load_aux_duplicate (void *aux_) {
+	struct lazy_load_aux *aux = aux_;
+	struct lazy_load_aux *copy = malloc (sizeof *copy);
+	if (copy == NULL)
+		return NULL;
+
+	copy->ofs = aux->ofs;
+	copy->page_read_bytes = aux->page_read_bytes;
+	copy->page_zero_bytes = aux->page_zero_bytes;
+	copy->owns_file = true;
+
+	lock_acquire (&filesys_lock);
+	copy->file = file_duplicate (aux->file);
+	lock_release (&filesys_lock);
+
+	if (copy->file == NULL) {
+		free (copy);
+		return NULL;
+	}
+
+	return copy;
+}
+
+void
+lazy_load_aux_destroy (void *aux_) {
+	struct lazy_load_aux *aux = aux_;
+	if (aux == NULL)
+		return;
+
+	if (aux->owns_file && aux->file != NULL) {
+		lock_acquire (&filesys_lock);
+		file_close (aux->file);
+		lock_release (&filesys_lock);
+	}
+
+	free (aux);
+}
+
+/* lazy load 시 실행 파일의 segment 내용을 실제 frame에 채우는 함수. 성공 여부 반환 */
 static bool
 lazy_load_segment (struct page *page, void *aux) {
-	/* TODO: Load the segment from the file */
-	/* TODO: This called when the first page fault occurs on address VA. */
-	/* TODO: VA is available when calling this function. */
+	/*  Load the segment from the file */
+	struct lazy_load_aux *lla = aux;
+
+	/* syscall 경로는 filesys_lock 획득 전에 user buffer를 검증하므로
+	    현재 lazy load 경로에서 deadlock 문제는 발생하지 않는다. */
+
+	/* This called when the first page fault occurs on address VA. */
+	uint8_t *kva = page->frame->kva;
+	lock_acquire (&filesys_lock);
+	off_t bytes_read = file_read_at (lla->file, kva, lla->page_read_bytes, lla->ofs);
+	lock_release (&filesys_lock);
+	if (bytes_read != (off_t) lla->page_read_bytes) {
+		lazy_load_aux_destroy (lla);
+		return false;
+	}
+
+	/* VA is available when calling this function. */
+	memset (kva + lla->page_read_bytes, 0, lla->page_zero_bytes);
+	lazy_load_aux_destroy (lla);
+	return true;
 }
 
 /* Loads a segment starting at offset OFS in FILE at address
@@ -1395,16 +1467,29 @@ load_segment (struct file *file, off_t ofs, uint8_t *upage,
 		size_t page_read_bytes = read_bytes < PGSIZE ? read_bytes : PGSIZE;
 		size_t page_zero_bytes = PGSIZE - page_read_bytes;
 
-		/* TODO: Set up aux to pass information to the lazy_load_segment. */
-		void *aux = NULL;
-		if (!vm_alloc_page_with_initializer (VM_ANON, upage,
-		                                     writable, lazy_load_segment, aux))
+		/* Set up aux to pass information to the lazy_load_segment. */
+		struct lazy_load_aux *aux = malloc (sizeof *aux);
+		if (aux == NULL)
 			return false;
+
+		aux->file = file;
+		aux->ofs = ofs;
+		aux->page_read_bytes = page_read_bytes;
+		aux->page_zero_bytes = page_zero_bytes;
+		aux->owns_file = false;
+
+		/* upage가 이미 SPT에 등록되어 있지 않다면 lazy load용 uninit page를 등록한다.
+		    등록 실패 시 aux는 이 함수에서 직접 해제한다. */
+		if (!vm_alloc_page_with_initializer (VM_ANON, upage, writable, lazy_load_segment, aux)) {
+			lazy_load_aux_destroy (aux);
+			return false;
+		}
 
 		/* Advance. */
 		read_bytes -= page_read_bytes;
 		zero_bytes -= page_zero_bytes;
 		upage += PGSIZE;
+		ofs += page_read_bytes;
 	}
 	return true;
 }
