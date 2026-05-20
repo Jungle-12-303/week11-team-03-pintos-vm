@@ -33,50 +33,107 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Validate branch policy
-        uses: actions/github-script@v7
-        with:
-          script: |
-            const teamMembers = [
-              'HyungminYoon1',
-              'HyeYeonLee0112',
-              'Cho1022',
-              'choihyunjin1',
-            ];
+        shell: bash
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.inputs.pr_number || '' }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          node <<'NODE'
+          const fs = require('fs');
+          const https = require('https');
 
-            const allowedRemoteBranches = ['main', 'dev', 'team'];
+          const teamMembers = [
+            'HyungminYoon1',
+            'HyeYeonLee0112',
+            'Cho1022',
+            'choihyunjin1',
+          ];
 
-            const { owner, repo } = context.repo;
-            let pr = context.payload.pull_request;
+          const allowedRemoteBranches = ['main', 'dev', 'team', 'pair-a', 'pair-b'];
+          const pairBranches = ['pair-a', 'pair-b'];
 
-            async function reportManualStatus(state, description) {
-              if (context.eventName !== 'workflow_dispatch' || !pr?.head?.sha) {
-                return;
-              }
+          const eventName = process.env.GITHUB_EVENT_NAME;
+          const repository = process.env.GITHUB_REPOSITORY;
+          const token = process.env.GITHUB_TOKEN;
+          const runUrl = process.env.RUN_URL;
+          const payloadText = fs.readFileSync(process.env.GITHUB_EVENT_PATH, 'utf8').replace(/^\uFEFF/, '');
+          const payload = JSON.parse(payloadText);
+          let pr = payload.pull_request;
 
-              const targetUrl = `${context.serverUrl}/${owner}/${repo}/actions/runs/${context.runId}`;
-              try {
-                await github.rest.repos.createCommitStatus({
-                  owner,
-                  repo,
-                  sha: pr.head.sha,
-                  state,
-                  context: 'branch-policy',
-                  description: description.slice(0, 140),
-                  target_url: targetUrl,
+          function request(method, path, body) {
+            return new Promise((resolve, reject) => {
+              const data = body ? JSON.stringify(body) : undefined;
+              const req = https.request({
+                hostname: 'api.github.com',
+                path,
+                method,
+                headers: {
+                  'Accept': 'application/vnd.github+json',
+                  'Authorization': `Bearer ${token}`,
+                  'Content-Type': 'application/json',
+                  'User-Agent': 'branch-policy-workflow',
+                  'X-GitHub-Api-Version': '2022-11-28',
+                },
+              }, (res) => {
+                let response = '';
+                res.setEncoding('utf8');
+                res.on('data', (chunk) => {
+                  response += chunk;
                 });
-              } catch (error) {
-                core.warning(`Could not report manual branch-policy status: ${error.message}`);
-              }
-            }
+                res.on('end', () => {
+                  let parsed = {};
+                  if (response) {
+                    try {
+                      parsed = JSON.parse(response);
+                    } catch (error) {
+                      reject(new Error(`GitHub API returned invalid JSON: ${error.message}`));
+                      return;
+                    }
+                  }
 
-            function fail(message) {
-              core.setFailed(message);
-              throw new Error(message);
+                  if (res.statusCode < 200 || res.statusCode >= 300) {
+                    reject(new Error(parsed.message || `GitHub API request failed with ${res.statusCode}`));
+                    return;
+                  }
+
+                  resolve(parsed);
+                });
+              });
+
+              req.on('error', reject);
+              if (data) {
+                req.write(data);
+              }
+              req.end();
+            });
+          }
+
+          async function reportManualStatus(state, description) {
+            if (eventName !== 'workflow_dispatch' || !pr?.head?.sha) {
+              return;
             }
 
             try {
-              if (context.eventName === 'workflow_dispatch') {
-                const prNumberInput = context.payload.inputs?.pr_number;
+              await request('POST', `/repos/${repository}/statuses/${pr.head.sha}`, {
+                state,
+                context: 'branch-policy',
+                description: description.slice(0, 140),
+                target_url: runUrl,
+              });
+            } catch (error) {
+              console.warn(`Could not report manual branch-policy status: ${error.message}`);
+            }
+          }
+
+          function fail(message) {
+            throw new Error(message);
+          }
+
+          async function main() {
+            try {
+              if (eventName === 'workflow_dispatch') {
+                const prNumberInput = process.env.PR_NUMBER;
                 if (!prNumberInput) {
                   fail('workflow_dispatch requires pr_number input.');
                 }
@@ -86,12 +143,7 @@ jobs:
                   fail(`pr_number must be a positive integer. Current value: ${prNumberInput}.`);
                 }
 
-                const response = await github.rest.pulls.get({
-                  owner,
-                  repo,
-                  pull_number: prNumber,
-                });
-                pr = response.data;
+                pr = await request('GET', `/repos/${repository}/pulls/${prNumber}`);
               }
 
               const baseBranch = pr.base.ref;
@@ -110,7 +162,7 @@ jobs:
 
               if (!allowedRemoteBranches.includes(baseBranch) || !allowedRemoteBranches.includes(headBranch)) {
                 fail(
-                  `Only main, dev, and team branches are allowed in pull requests. ` +
+                  `Only main, dev, team, pair-a, and pair-b branches are allowed in pull requests. ` +
                   `Current flow: ${headBranch} -> ${baseBranch}.`
                 );
               }
@@ -120,7 +172,7 @@ jobs:
                   fail(`Only dev -> main pull requests are allowed. Current head branch: ${headBranch}.`);
                 }
 
-                core.info('Allowed dev -> main pull request.');
+                console.log('Allowed dev -> main pull request.');
                 await reportManualStatus('success', 'Branch policy passed.');
                 return;
               }
@@ -137,7 +189,24 @@ jobs:
                   );
                 }
 
-                core.info(`Allowed team -> dev pull request by ${prAuthor}.`);
+                console.log(`Allowed team -> dev pull request by ${prAuthor}.`);
+                await reportManualStatus('success', 'Branch policy passed.');
+                return;
+              }
+
+              if (baseBranch === 'team') {
+                if (!pairBranches.includes(headBranch)) {
+                  fail(`Only pair-a/pair-b -> team pull requests are allowed. Current head branch: ${headBranch}.`);
+                }
+
+                if (!teamMembers.includes(prAuthor)) {
+                  fail(
+                    `pair -> team pull requests must be opened by one of: ` +
+                    `${teamMembers.join(', ')}. Current author: ${prAuthor}.`
+                  );
+                }
+
+                console.log(`Allowed ${headBranch} -> team pull request by ${prAuthor}.`);
                 await reportManualStatus('success', 'Branch policy passed.');
                 return;
               }
@@ -147,3 +216,10 @@ jobs:
               await reportManualStatus('failure', error.message || 'Branch policy failed.');
               throw error;
             }
+          }
+
+          main().catch((error) => {
+            console.error(error.message);
+            process.exit(1);
+          });
+          NODE

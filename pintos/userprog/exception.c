@@ -37,7 +37,7 @@ exception_init (void) {
 	intr_register_int (3, 3, INTR_ON, kill, "#BP Breakpoint Exception");
 	intr_register_int (4, 3, INTR_ON, kill, "#OF Overflow Exception");
 	intr_register_int (5, 3, INTR_ON, kill,
-			"#BR BOUND Range Exceeded Exception");
+	                   "#BR BOUND Range Exceeded Exception");
 
 	/* These exceptions have DPL==0, preventing user processes from
 	   invoking them via the INT instruction.  They can still be
@@ -47,13 +47,13 @@ exception_init (void) {
 	intr_register_int (1, 0, INTR_ON, kill, "#DB Debug Exception");
 	intr_register_int (6, 0, INTR_ON, kill, "#UD Invalid Opcode Exception");
 	intr_register_int (7, 0, INTR_ON, kill,
-			"#NM Device Not Available Exception");
+	                   "#NM Device Not Available Exception");
 	intr_register_int (11, 0, INTR_ON, kill, "#NP Segment Not Present");
 	intr_register_int (12, 0, INTR_ON, kill, "#SS Stack Fault Exception");
 	intr_register_int (13, 0, INTR_ON, kill, "#GP General Protection Exception");
 	intr_register_int (16, 0, INTR_ON, kill, "#MF x87 FPU Floating-Point Error");
 	intr_register_int (19, 0, INTR_ON, kill,
-			"#XF SIMD Floating-Point Exception");
+	                   "#XF SIMD Floating-Point Exception");
 
 	/* Most exceptions can be handled with interrupts turned on.
 	   We need to disable interrupts for page faults because the
@@ -81,25 +81,25 @@ kill (struct intr_frame *f) {
 	/* The interrupt frame's code segment value tells us where the
 	   exception originated. */
 	switch (f->cs) {
-		case SEL_UCSEG:
-			/* User's code segment, so it's a user exception, as we
-			   expected.  Kill the user process.  */
-			process_exit_with_status (-1);
+	case SEL_UCSEG:
+		/* User's code segment, so it's a user exception, as we
+		   expected.  Kill the user process.  */
+		process_exit_with_status (-1);
 
-		case SEL_KCSEG:
-			/* Kernel's code segment, which indicates a kernel bug.
-			   Kernel code shouldn't throw exceptions.  (Page faults
-			   may cause kernel exceptions--but they shouldn't arrive
-			   here.)  Panic the kernel to make the point.  */
-			intr_dump_frame (f);
-			PANIC ("Kernel bug - unexpected interrupt in kernel");
+	case SEL_KCSEG:
+		/* Kernel's code segment, which indicates a kernel bug.
+		   Kernel code shouldn't throw exceptions.  (Page faults
+		   may cause kernel exceptions--but they shouldn't arrive
+		   here.)  Panic the kernel to make the point.  */
+		intr_dump_frame (f);
+		PANIC ("Kernel bug - unexpected interrupt in kernel");
 
-		default:
-			/* Some other code segment?  Shouldn't happen.  Panic the
-			   kernel. */
-			printf ("Interrupt %#04llx (%s) in unknown segment %04x\n",
-					f->vec_no, intr_name (f->vec_no), f->cs);
-			thread_exit ();
+	default:
+		/* Some other code segment?  Shouldn't happen.  Panic the
+		   kernel. */
+		printf ("Interrupt %#04llx (%s) in unknown segment %04x\n",
+		        f->vec_no, intr_name (f->vec_no), f->cs);
+		thread_exit ();
 	}
 }
 
@@ -116,24 +116,26 @@ kill (struct intr_frame *f) {
    [IA32-v3a] section 5.15 "Exception and Interrupt Reference". */
 static void
 page_fault (struct intr_frame *f) {
-	bool not_present;  /* True: not-present page, false: writing r/o page. */
-	bool write;        /* True: access was write, false: access was read. */
-	bool user;         /* True: access by user, false: access by kernel. */
-	void *fault_addr;  /* Fault address. */
+	bool not_present; /* True: not-present page, false: writing r/o page. // 접근 페이지 현재 page table에 present 상태로 매핑 여부 */
+	bool write;       /* True: access was write, false: access was read. // fault가 쓰기 접근 중 발생했는지 확인 (true: write 하다가 fault, false: read 하다가 fault) */
+	bool user;        /* True: access by user, false: access by kernel. // fault가 발생한 모드 (true: 유저 코드 실행 중 fault, false: 커널 코드 실행 중 fault)*/
+	void *fault_addr; /* Fault address. */
 
 	/* Obtain faulting address, the virtual address that was
 	   accessed to cause the fault.  It may point to code or to
 	   data.  It is not necessarily the address of the instruction
 	   that caused the fault (that's f->rip). */
 
-	fault_addr = (void *) rcr2();
+	// page fault가 발생한 가상 주소(CR2 레지스터에 저장된 것)를 읽기
+	fault_addr = (void *) rcr2 (); // rcr2 ()는 CPU의 CR2 레지스터 값을 읽는 함수
 
 	/* Turn interrupts back on (they were only off so that we could
 	   be assured of reading CR2 before it changed). */
-	intr_enable ();
-
+	intr_enable (); // CR2 값 저장 후에 다시 interrupt 켜기
 
 	/* Determine cause. */
+	/* 접근한 페이지가 현재 page table에 present 상태로 매핑되어 있지 않았는지 확인.
+	    (true: 페이지가 없음, false: 페이지는 있는데 권한 위반) */
 	not_present = (f->error_code & PF_P) == 0;
 	write = (f->error_code & PF_W) != 0;
 	user = (f->error_code & PF_U) != 0;
@@ -153,9 +155,9 @@ page_fault (struct intr_frame *f) {
 
 	/* If the fault is true fault, show info and exit. */
 	printf ("Page fault at %p: %s error %s page in %s context.\n",
-			fault_addr,
-			not_present ? "not present" : "rights violation",
-			write ? "writing" : "reading",
-			user ? "user" : "kernel");
+	        fault_addr,
+	        not_present ? "not present" : "rights violation",
+	        write ? "writing" : "reading",
+	        user ? "user" : "kernel");
 	kill (f);
 }

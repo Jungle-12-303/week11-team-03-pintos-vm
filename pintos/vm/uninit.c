@@ -10,6 +10,8 @@
 
 #include "vm/vm.h"
 #include "vm/uninit.h"
+#include "userprog/process.h"
+#include "vm/file.h"
 
 static bool uninit_initialize (struct page *page, void *kva);
 static void uninit_destroy (struct page *page);
@@ -25,8 +27,8 @@ static const struct page_operations uninit_ops = {
 /* DO NOT MODIFY this function */
 void
 uninit_new (struct page *page, void *va, vm_initializer *init,
-		enum vm_type type, void *aux,
-		bool (*initializer)(struct page *, enum vm_type, void *)) {
+            enum vm_type type, void *aux,
+            bool (*initializer) (struct page *, enum vm_type, void *)) {
 	ASSERT (page != NULL);
 
 	*page = (struct page) {
@@ -34,10 +36,10 @@ uninit_new (struct page *page, void *va, vm_initializer *init,
 		.va = va,
 		.frame = NULL, /* no frame for now */
 		.uninit = (struct uninit_page) {
-			.init = init,
-			.type = type,
-			.aux = aux,
-			.page_initializer = initializer,
+		        .init = init,
+		        .type = type,
+		        .aux = aux,
+		        .page_initializer = initializer,
 		}
 	};
 }
@@ -51,9 +53,9 @@ uninit_initialize (struct page *page, void *kva) {
 	vm_initializer *init = uninit->init;
 	void *aux = uninit->aux;
 
-	/* TODO: You may need to fix this function. */
+	/* You may need to fix this function. */
 	return uninit->page_initializer (page, uninit->type, kva) &&
-		(init ? init (page, aux) : true);
+	       (init ? init (page, aux) : true);
 }
 
 /* Free the resources hold by uninit_page. Although most of pages are transmuted
@@ -62,7 +64,21 @@ uninit_initialize (struct page *page, void *kva) {
  * PAGE will be freed by the caller. */
 static void
 uninit_destroy (struct page *page) {
-	struct uninit_page *uninit UNUSED = &page->uninit;
-	/* TODO: Fill this function.
-	 * TODO: If you don't have anything to do, just return. */
+	struct uninit_page *uninit = &page->uninit;
+
+	if (uninit->aux == NULL)
+		return;
+
+	switch (VM_TYPE (uninit->type)) {
+	case VM_ANON:
+		lazy_load_aux_destroy (uninit->aux);
+		break;
+	case VM_FILE:
+		mmap_aux_destroy (uninit->aux);
+		break;
+	default:
+		break;
+	}
+
+	uninit->aux = NULL;
 }
