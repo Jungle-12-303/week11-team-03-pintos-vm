@@ -80,8 +80,8 @@ file_backed_swap_out (struct page *page) {
 /* Destory the file backed page. PAGE will be freed by the caller. */
 static void
 file_backed_destroy (struct page *page) {
-	printf ("!![file_backed_destroy]\n");
 	file_backed_swap_out (page);
+	vm_cleanup_page_frame(page);
 }
 
 static bool
