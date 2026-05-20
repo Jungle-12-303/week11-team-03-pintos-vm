@@ -50,19 +50,7 @@ vm_frame_table_init (void) {
 
 bool
 vm_frame_table_insert (struct frame *frame) {
-	// bool frame_exist = false;
-	// for (struct list_elem *e = list_begin (&thread_current ()->frame_table);
-	//      e != list_end (&thread_current ()->frame_table); e = list_next (e)) {
-	// 	struct frame *f = list_entry (e, struct frame, elem);
-	// 	if (frame == f) {
-	// 		frame_exist = true;
-	// 		break;
-	// 	}
-	// }
-
 	lock_acquire (&frame_lock);
-	// if (frame_exist)
-	// 	list_remove (&frame->elem);
 	list_push_back (&frame_table, &frame->elem);
 	lock_release (&frame_lock);
 
@@ -368,10 +356,7 @@ vm_free_frame (struct frame *frame) {
 		frame->page = NULL;
 	}
 
-	lock_acquire (&frame_lock);
-	list_remove (&frame->elem);
-	lock_release (&frame_lock);
-
+	vm_frame_table_delete (frame);
 	palloc_free_page (frame->kva);
 	free (frame);
 }

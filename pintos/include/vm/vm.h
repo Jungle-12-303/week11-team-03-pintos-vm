@@ -71,6 +71,7 @@ struct page {
 
 	void *mapping_start;  // 이 페이지 같이 매핑되는 첫 페이지의 위치
 	off_t mapping_length; // 이 페이지가 매핑될 때 매핑요구받은 크기
+	struct thread *owner_thread;
 };
 
 /* The representation of "frame" */

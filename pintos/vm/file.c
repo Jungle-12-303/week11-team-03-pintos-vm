@@ -19,6 +19,7 @@ static bool file_backed_swap_in (struct page *page, void *kva);
 static bool file_backed_swap_out (struct page *page);
 static void file_backed_destroy (struct page *page);
 static bool lazy_load_file (struct page *page, void *file_page_aux);
+static bool set_page_mapping_info (void *va, void *mapping_start, size_t mapping_length);
 
 /* DO NOT MODIFY this struct */
 static const struct page_operations file_ops = {
@@ -47,11 +48,13 @@ file_backed_initializer (struct page *page, enum vm_type type, void *kva) {
 /* Swap in the page by read contents from the file. */
 static bool
 file_backed_swap_in (struct page *page, void *kva) {
-	// printf ("!![file_backed_swap_in] 파일 페이지 스왑 인\n");
 	struct file_page *file_page = &page->file;
 
 	off_t read_byte = file_read_at (file_page->file, kva, file_page->size, file_page->offset);
-	memset (kva + read_byte, 0, PGSIZE - read_byte);
+	if (read_byte != file_page->size)
+		return false;
+
+	memset ((uint8_t *) kva + read_byte, 0, PGSIZE - read_byte);
 
 	return true;
 }
@@ -60,8 +63,11 @@ file_backed_swap_in (struct page *page, void *kva) {
 static bool
 file_backed_swap_out (struct page *page) {
 	struct file_page *file_page = &page->file;
+
+	if (page->frame == NULL)
+		return true;
+
 	struct thread *owner_t = page->frame->owner_thread;
-	// file_write_at (file_page->file, page->frame->kva, file_page->size, file_page->offset);
 
 	if (pml4_is_dirty (owner_t->pml4, page->va) == true) {
 		// printf ("!![file_backed_swap_out] 파일 내용 변경\n");
@@ -74,7 +80,7 @@ file_backed_swap_out (struct page *page) {
 /* Destory the file backed page. PAGE will be freed by the caller. */
 static void
 file_backed_destroy (struct page *page) {
-	struct file_page *file_page UNUSED = &page->file;
+	printf ("!![file_backed_destroy]\n");
 	file_backed_swap_out (page);
 }
 
@@ -85,10 +91,22 @@ lazy_load_file (struct page *page, void *file_page_aux) {
 	page->file.file = aux->file;
 	page->file.offset = aux->offset;
 	page->file.size = aux->size;
-
 	file_backed_swap_in (page, page->frame->kva);
 
 	free (aux);
+	return true;
+}
+
+static bool
+set_page_mapping_info (void *va, void *mapping_start, size_t mapping_length) {
+	struct page *page = spt_find_page (&thread_current ()->spt, va);
+
+	if (page == NULL)
+		return false;
+
+	page->mapping_start = mapping_start;
+	page->mapping_length = mapping_length;
+
 	return true;
 }
 
@@ -126,11 +144,6 @@ do_mmap (void *addr, size_t length, int writable,
 
 			succ = vm_alloc_page_with_initializer (VM_FILE, cur_addr, writable,
 			                                       lazy_load_file, aux);
-
-			struct page *page = spt_find_page (&thread_current ()->spt, cur_addr);
-			page->mapping_length = addr;
-			page->mapping_length = length;
-
 			if (succ == false) {
 				// printf ("[!!] 풀페이지 매핑 시도 실패 \n");
 				goto error;
@@ -155,6 +168,10 @@ do_mmap (void *addr, size_t length, int writable,
 			offset += PGSIZE;
 			rest_size = 0;
 		}
+
+		// 증가하기 전 작업하던 페이지 매핑 멤버에 값 할당
+		if (set_page_mapping_info (cur_addr - PGSIZE, addr, length) == false)
+			goto error;
 	}
 
 	return addr;
@@ -185,20 +202,17 @@ do_munmap (void *addr) {
 
 	struct supplemental_page_table *spt = &thread_current ()->spt;
 	struct page *page = spt_find_page (&thread_current ()->spt, addr);
-	off_t length = page->mapping_length;
+	if (page == NULL)
+		return;
 	void *cur_addr = page->mapping_start;
+	off_t length = page->mapping_length;
 
 	size_t total_page = (length + PGSIZE - 1) / PGSIZE;
 
 	while (total_page > 0) {
 		page = spt_find_page (&thread_current ()->spt, cur_addr);
-
-		if (page->frame != NULL) {
-			vm_frame_table_delete (page->frame);
-			palloc_free_page (page->frame->kva);
-			page->frame->page = NULL;
-		}
-		pml4_clear_page (thread_current ()->pml4, cur_addr);
+		if (page == NULL)
+			return;
 		spt_remove_page (&thread_current ()->spt, page);
 
 		cur_addr += PGSIZE;
