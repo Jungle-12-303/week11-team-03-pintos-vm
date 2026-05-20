@@ -11,5 +11,6 @@ struct anon_page {
 
 void vm_anon_init (void);
 bool anon_initializer (struct page *page, enum vm_type type, void *kva);
+bool anon_copy_from_swap (struct page *src, void *dst_kva);
 
 #endif

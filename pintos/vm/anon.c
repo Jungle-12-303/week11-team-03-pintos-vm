@@ -146,3 +146,29 @@ anon_destroy (struct page *page) {
 
 	vm_cleanup_page_frame (page); // 프레임 제거 함수
 }
+
+// [헬퍼 함수] 부모 swap slot을 소비하지 않고 읽기만 하는 helper 함수
+bool
+anon_copy_from_swap (struct page *src, void *dst_kva) {
+	struct anon_page *parent_anon_page;
+
+	ASSERT (src != NULL);
+	ASSERT (dst_kva != NULL);
+	ASSERT (swap_bitmap != NULL);
+
+	parent_anon_page = &src->anon;
+
+	ASSERT (parent_anon_page->in_swapdisk);
+	ASSERT (parent_anon_page->slot_idx != BITMAP_ERROR);
+	ASSERT (parent_anon_page->slot_idx < bitmap_size (swap_bitmap));
+
+	disk_sector_t sector = (parent_anon_page->slot_idx) * SECTORS_PER_PAGE;
+
+	// 부모 page의 내용이 저장된 swap slot을 읽어서 자식 frame에 채운다.
+	lock_acquire (&swap_lock);
+	for (size_t i = 0; i < SECTORS_PER_PAGE; i++)
+		disk_read (swap_disk, sector + i, (uint8_t *) dst_kva + i * DISK_SECTOR_SIZE);
+	lock_release (&swap_lock);
+
+	return true;
+}

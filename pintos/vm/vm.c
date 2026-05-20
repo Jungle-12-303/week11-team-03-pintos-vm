@@ -565,7 +565,7 @@ supplemental_page_table_copy (struct supplemental_page_table *dst,
 		struct page *page = hash_entry (hash_cur (&iter), struct page, hash_elem);
 
 		switch (VM_TYPE (page->operations->type)) {
-		case VM_UNINIT: {
+		case VM_UNINIT: { // 아직 한 번도 fault-in 안 됨.
 			/* mmap page는 fork 시 자식에게 상속하지 않는다. */
 			if (VM_TYPE (page->uninit.type) == VM_FILE) {
 				break;
@@ -598,26 +598,45 @@ supplemental_page_table_copy (struct supplemental_page_table *dst,
 			break;
 		}
 		case VM_ANON: {
-			if (page->frame == NULL)
-				return false;
+			// 자식 SPT에 VM_UNINIT 상태의 anon page metadata를 등록
 			if (!vm_alloc_page (VM_ANON, page->va, page->writable))
 				return false;
-			if (!vm_claim_page (page->va)) {
-				struct page *child_page = spt_find_page (dst, page->va);
-				if (child_page != NULL)
-					spt_remove_page (dst, child_page);
-				return false;
-			}
 
+			// 자식 SPT에 등록한 page를 가져온다. (이후 claim 실패 cleanup과 데이터 복사에 사용)
 			struct page *child_page = spt_find_page (dst, page->va);
 			if (child_page == NULL)
 				return false;
-			if (child_page->frame == NULL) {
-				spt_remove_page (dst, child_page);
+
+			// 자식 page를 claim해 frame을 붙이고 anon_initializer()로 zero-fill한다.
+			if (!vm_claim_page (page->va)) {
+				spt_remove_page (dst, child_page); // clean up
 				return false;
 			}
 
-			memcpy (child_page->frame->kva, page->frame->kva, PGSIZE);
+			// claim 성공 후 frame 연결 여부를 방어적으로 확인
+			if (child_page->frame == NULL) {
+				spt_remove_page (dst, child_page); // clean up
+				return false;
+			}
+
+			// case1. 부모 frame이 있는 경우: 부모 frame에서 복사 (page->frame->kva에 실제 데이터 있음.)
+			if (page->frame != NULL) {
+				memcpy (child_page->frame->kva, page->frame->kva, PGSIZE);
+			}
+			// case2. 부모 page가 swap-out된 경우: 부모 swap slot에서 자식 frame으로 복사
+			// (eviction으로 swap disk로 밀려나서 page->frame == NULL 이지만 page->anon.slot_idx에 데이터 위치가 있음)
+			else if (page->anon.in_swapdisk) {
+				if (!anon_copy_from_swap (page, child_page->frame->kva)) {
+					spt_remove_page (dst, child_page);
+					return false;
+				}
+			}
+			// 실패 처리
+			else {
+				spt_remove_page (dst, child_page); // clean up
+				return false;
+			}
+
 			break;
 		}
 		case VM_FILE:
