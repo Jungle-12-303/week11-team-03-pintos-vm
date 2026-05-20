@@ -2,7 +2,7 @@
 
 ## 1. 문서 목적
 
-이 문서는 11-12주차 Pintos `Project 3: Virtual Memory` 협업 기준을 정리한다. 세부 운영 기록과 최신 날짜별 계획은 `local/study_plan/week11-12/team-collaboration.md`를 기준으로 하며, 이 문서는 `docs/`에서 확인할 수 있는 짧은 요약 문서로 유지한다.
+이 문서는 11-12주차 Pintos `Project 3: Virtual Memory` 협업 기준과 2026-05-20 기준 최종 구현 상태를 정리한다. 실제 구현 상태는 `pintos/` 코드, KAIST Pintos GitBook 요구사항, [구현 기록](week11-12-implementation-plan.md)을 함께 확인한다.
 
 이번 주차의 목표는 VM 테스트 통과만이 아니라 팀원이 아래 흐름을 함께 설명할 수 있는 상태를 만드는 것이다.
 
@@ -11,9 +11,9 @@
 - mmap file, frame, swap slot, aux 같은 자원의 생성 시점과 해제 시점
 - Project 2 process, syscall, fd table 구현이 VM 위에서 회귀 없이 동작해야 하는 이유
 
-## 2. 현재 운영 방식
+## 2. 운영 방식
 
-작업은 담당자별 장기 분업이 아니라 VM 구현 흐름과 테스트 묶음을 기준으로 진행한다. 2026-05-11과 2026-05-12는 4명이 한 화면에서 공동 구현했고, 2026-05-13부터는 2명:2명 페어 프로그래밍으로 나누어 진행한다.
+작업은 담당자별 장기 분업이 아니라 VM 구현 흐름과 테스트 묶음을 기준으로 진행했다. 2026-05-11과 2026-05-12는 4명이 한 화면에서 공동 구현했고, 2026-05-13부터는 2명:2명 페어 프로그래밍으로 나누어 진행했다.
 
 - 4인 세션: Driver 1명과 공동 검토자 3명이 설계, cleanup, 테스트 조건을 함께 확인한다.
 - 2인 페어: Driver 1명과 Navigator 1명이 작은 구현 단위를 맡고, 페어 간 변경 범위와 실패 지점을 공유한다.
@@ -48,24 +48,29 @@ PR에는 관련 테스트, 수정 파일/함수, 구현 의도, 새 구조체 �
 | 구간 | 할 일 | 산출물 |
 |------|------|------|
 | 시작 30분 | 전날 diff, 실패 테스트, panic log, `.output` 확인 | 오늘 첫 번째 실패 지점 확정 |
-| 학습 60-90분 | GitBook과 `local/week11-12_study_docs`에서 오늘 구현 범위만 읽기 | 팀원이 답해야 할 질문 정리 |
+| 학습 60-90분 | KAIST Pintos GitBook과 공개 문서에서 오늘 구현 범위만 읽기 | 팀원이 답해야 할 질문 정리 |
 | 구현 세션 | 작은 함수 단위로 작성하고 설계, cleanup, 테스트 조건 확인 | 빌드 가능한 작은 변경 |
 | 테스트 루프 | 가까운 테스트 1-3개 실행 후 같은 묶음으로 확장 | 통과/실패 테스트와 재현 명령 기록 |
 | 종료 30분 | 바뀐 구조체 필드, 자원 소유권, 남은 실패 원인 정리 | PR/WIL/이슈에 남길 문장 |
 
 ## 6. 일정과 현재 초점
 
-공동 구현은 2026-05-11부터 2026-05-20까지 진행하고, 2026-05-21은 발표와 제출 정리에 집중한다. 2026-05-17은 공동 구현 제외일로 두고 mmap, dirty bit, eviction/swap을 개인 학습 범위로 삼았다.
+공동 구현은 2026-05-11부터 2026-05-20까지 진행했고, 2026-05-17은 공동 구현 제외일로 두고 mmap, dirty bit, eviction/swap을 개인 학습 범위로 삼았다. 2026-05-20에는 VM 필수 구현 범위와 발표 자료 정리를 마쳤고, 2026-05-21은 주간 공유 발표와 제출에 집중한다.
 
-현재 구현 초점은 아래 순서다.
+2026-05-20 기준 구현 상태는 아래와 같다.
 
-1. SPT copy와 fork 기반 page lifecycle 정리
-2. `mmap()` / `munmap()` 등록과 file-backed lazy read
-3. dirty page write-back, frame eviction, anon/file-backed swap 통합
-4. VM 전체 회귀와 Project 1/2, filesys/base 회귀 확인
-5. 발표 자료와 WIL 정리
+1. SPT hash table, page lookup/insert/remove, frame claim 흐름을 구현했다.
+2. ELF lazy loading, page fault 처리, stack growth, VM-aware syscall pointer validation을 연결했다.
+3. `supplemental_page_table_copy()`와 fork 기반 page lifecycle을 구현했다. uninit anon page는 복제 후 즉시 claim하고, loaded anon page는 새 frame에 내용을 복사한다.
+4. swap-out된 anon page는 부모 swap slot을 소비하지 않고 `anon_copy_from_swap()`으로 자식 frame에 복사한다.
+5. array-backed fd table과 `fd_handle` 기반 fd 복제를 정리했고, `dup2()`로 공유하던 fd 관계를 fork 후 자식 안에서도 유지한다.
+6. `child_status`, fd cleanup, exec file write-deny cleanup 경로를 유지해 VM 변경이 Project 2 process lifecycle을 깨뜨리지 않게 했다.
+7. `mmap()` / `munmap()`, file-backed lazy read, dirty write-back, mmap aux lifecycle을 구현했다.
+8. mmap file-backed page는 현재 테스트 정책에 맞춰 fork에서 상속하지 않는다. `VM_UNINIT + VM_FILE` page와 fault-in된 `VM_FILE` page를 모두 copy 대상에서 제외한다.
+9. frame table, second-chance victim selection, anon/file-backed swap in/out을 연결했다.
+10. 팀 PPT와 개인 2분 발표 자료를 완성했고, 실제 통과/실패 결과와 남은 리스크는 PR, 이슈, WIL에 기록한다.
 
-Extra COW는 VM 필수 범위가 안정된 뒤에만 판단한다.
+Extra COW(`cow-simple`)는 VM 필수 구현과 분리된 선택 과제로 남긴다.
 
 ## 7. 테스트 운영 원칙
 
@@ -82,6 +87,6 @@ Extra COW는 VM 필수 범위가 안정된 뒤에만 판단한다.
 
 ## 8. 제출과 공유
 
-최종 공유 발표는 2026-05-21 오전 10시이며, 팀 발표 자료와 노트북은 1개로 준비한다. 개인별 2분 발표 내용을 함께 준비하고, 2026-05-21 정오까지 주간 공유 발표 자료와 WIL을 제출한다.
+최종 공유 발표는 2026-05-21 오전 10시이며, 팀 발표 자료와 노트북은 1개로 준비한다. 2026-05-20 기준 팀 PPT와 개인별 2분 발표 자료는 완성했고, 2026-05-21 정오까지 주간 공유 발표 자료와 WIL을 제출한다.
 
 WIL에는 단순 결과보다 배운 개념, 실패 원인, 수정 근거, 남은 리스크를 남긴다.
